@@ -670,12 +670,13 @@ pub(crate) fn known_issues_html() -> String {
 <div class=card><h2>Websites</h2><ul>\
 <li>Sites that play protected (DRM) media do not work: Spotify, Netflix, Disney+ and similar.</li>\
 <li>Sites with strict anti-bot checks (such as a login behind a reCAPTCHA) may not let you in.</li>\
+<li>Sites behind Cloudflare&#39;s &quot;Just a moment&quot; or &quot;Performing security verification&quot; check (for example claude.ai or isdown.app) cannot be passed in Pteron. Use <b>Open in default browser</b> on that page.</li>\
 <li>Some modern web pages look wrong, stay blank, or load slowly, because the engine does not support every web feature yet.</li>\
 <li>The text cursor may not show in some text boxes (being looked at).</li></ul></div>\
 <div class=card><h2>Reading mode, sync and security</h2><ul>\
 <li>Reading mode (the <b>Aa</b> button) works on articles; on other pages it says it found nothing.</li>\
 <li>Sync works through a folder you choose and covers bookmarks and settings only. If both computers change the same thing before they sync, the newer change wins.</li>\
-<li>Bookmark folders are one level deep. Address bar shortcuts: <b>g</b>, <b>ddg</b>, <b>yt</b>, <b>w</b>, <b>gh</b>, <b>maps</b>, <b>r</b> followed by a space and your search (for example <i>yt lofi</i>).</li>\
+<li>Bookmark folders are one level deep. Address bar shortcuts: <b>g</b>, <b>ddg</b>, <b>yt</b>, <b>w</b>, <b>gh</b>, <b>maps</b>, <b>r</b>, <b>i</b> (pictures) followed by a space and your search (for example <i>yt lofi</i>).</li>\
 <li>On Google results the &quot;About this result&quot; dots and the translate link are hidden, because the engine draws them in the wrong place.</li>\
 <li>The http warning appears for sites without https. Some old sites have no https version.</li></ul></div>\
 <div class=card><h2>YouTube</h2><ul>\
@@ -796,12 +797,42 @@ pub(crate) const KEYWORDS: &[(&str, &str, &str)] = &[
     ("r", "Reddit", "https://www.reddit.com/search/?q=%s"),
 ];
 
+/// Address bar words that search for pictures: "i cats" or "img cats".
+const IMAGE_WORDS: &[&str] = &["i", "img", "images"];
+
+/// The image-search address of the engine in `settings`. DuckDuckGo's own image page needs a
+/// lot of JavaScript, so it uses Bing's.
+pub(crate) fn image_template_for(settings: &Settings) -> String {
+    match settings.engine.as_str() {
+        "google" => "https://www.google.com/search?q=%s&tbm=isch".to_string(),
+        "brave" => "https://search.brave.com/images?q=%s".to_string(),
+        "startpage" => "https://www.startpage.com/do/search?q=%s&cat=pics".to_string(),
+        SEARXNG_ID => {
+            let base = search_url_for(settings);
+            let sep = if base.contains('?') { '&' } else { '?' };
+            format!("{base}{sep}categories=images")
+        },
+        _ => "https://www.bing.com/images/search?q=%s".to_string(),
+    }
+}
+
+/// (name, address template) for an address bar shortcut word.
+fn keyword_target(word: &str) -> Option<(String, String)> {
+    let word = word.to_lowercase();
+    if IMAGE_WORDS.contains(&word.as_str()) {
+        return Some(("images".to_string(), image_template_for(&settings())));
+    }
+    KEYWORDS
+        .iter()
+        .find(|(key, ..)| *key == word)
+        .map(|(_, name, template)| (name.to_string(), template.to_string()))
+}
+
 /// The row shown first under the address bar for a shortcut: ("Search YouTube for lofi", url).
 pub(crate) fn keyword_hint(text: &str) -> Option<(String, String)> {
     let url = expand_keyword(text)?;
     let (word, rest) = text.trim().split_once(' ')?;
-    let word = word.to_lowercase();
-    let (_, name, _) = KEYWORDS.iter().find(|(key, ..)| *key == word)?;
+    let (name, _) = keyword_target(word)?;
     Some((format!("Search {name} for {}", rest.trim()), url))
 }
 
@@ -814,8 +845,7 @@ pub(crate) fn expand_keyword(text: &str) -> Option<String> {
     if rest.is_empty() {
         return None;
     }
-    let word = word.to_lowercase();
-    let (_, _, template) = KEYWORDS.iter().find(|(key, ..)| *key == word)?;
+    let (_, template) = keyword_target(word)?;
     Some(template.replace("%s", &encode_query(rest)))
 }
 
@@ -832,5 +862,23 @@ mod keyword_tests {
         assert_eq!(expand_keyword("yt"), None);
         assert_eq!(expand_keyword("yt   "), None);
         assert_eq!(expand_keyword("hello world"), None);
+    }
+
+    #[test]
+    fn image_shortcut_follows_the_engine() {
+        let mut settings = Settings::default();
+        let url = |s: &Settings| image_template_for(s).replace("%s", "cats");
+        assert_eq!(url(&settings), "https://www.bing.com/images/search?q=cats");
+        settings.engine = "google".into();
+        assert_eq!(url(&settings), "https://www.google.com/search?q=cats&tbm=isch");
+        settings.engine = "brave".into();
+        assert!(url(&settings).starts_with("https://search.brave.com/images"));
+        settings.engine = SEARXNG_ID.into();
+        settings.searxng_url = "https://s.example".into();
+        assert_eq!(url(&settings), "https://s.example/search?q=cats&categories=images");
+        // Plain words that merely start with "i" are not shortcuts.
+        assert_eq!(expand_keyword("i"), None);
+        assert_eq!(expand_keyword("it works"), None);
+        assert!(expand_keyword("img red car").unwrap().contains("red+car"));
     }
 }
