@@ -81,6 +81,12 @@ pub(crate) struct Settings {
     pub multi_mode: String,
     /// Engine ids used for the multi-engine search.
     pub multi_engines: Vec<String>,
+    /// Remove tracking parts (utm_*, fbclid, ...) from the addresses of pages.
+    pub strip_tracking: bool,
+    /// Send Do Not Track and Global Privacy Control signals (applies after a restart).
+    pub privacy_signals: bool,
+    /// Look for the https version of an http site before showing the warning.
+    pub https_first: bool,
 }
 
 impl Default for Settings {
@@ -113,6 +119,9 @@ impl Default for Settings {
             multi_search: false,
             multi_mode: "tabs".to_string(),
             multi_engines: vec!["duckduckgo".to_string(), "bing".to_string()],
+            strip_tracking: true,
+            privacy_signals: true,
+            https_first: true,
         }
     }
 }
@@ -186,6 +195,15 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
         settings.compat = crate::compat::clean_ids(
             list.iter().filter_map(|item| item.as_str().map(str::to_string)),
         );
+    }
+    for (key, field) in [
+        ("strip_tracking", &mut settings.strip_tracking),
+        ("privacy_signals", &mut settings.privacy_signals),
+        ("https_first", &mut settings.https_first),
+    ] {
+        if let Some(enabled) = value.get(key).and_then(|v| v.as_bool()) {
+            *field = enabled;
+        }
     }
     if let Some(enabled) = value.get("multi_search").and_then(|v| v.as_bool()) {
         settings.multi_search = enabled;
@@ -313,6 +331,9 @@ pub(crate) fn update(new_settings: Settings) {
         "multi_search": new_settings.multi_search,
         "multi_mode": new_settings.multi_mode,
         "multi_engines": new_settings.multi_engines,
+        "strip_tracking": new_settings.strip_tracking,
+        "privacy_signals": new_settings.privacy_signals,
+        "https_first": new_settings.https_first,
     });
     if let Err(error) = std::fs::write(&path, json.to_string()) {
         warn!("Could not save {}: {error}", path.display());
@@ -740,6 +761,14 @@ mod memory_mode_tests {
         assert_eq!(settings.memory_mode, "lowest");
         apply_json(&mut settings, &serde_json::json!({ "memory_mode": "nonsense" }));
         assert_eq!(settings.memory_mode, "normal");
+    }
+
+    #[test]
+    fn privacy_settings_default_on_and_can_be_switched_off() {
+        let mut settings = Settings::default();
+        assert!(settings.strip_tracking && settings.privacy_signals && settings.https_first);
+        apply_json(&mut settings, &serde_json::json!({ "strip_tracking": false, "https_first": false }));
+        assert!(!settings.strip_tracking && !settings.https_first && settings.privacy_signals);
     }
 
     #[test]

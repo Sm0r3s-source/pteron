@@ -1,121 +1,42 @@
-# Pteron
+﻿# Pteron
 
-A light web browser for Windows, built on the [Servo](https://servo.org) engine (v0.7.0) in Rust.
-Sidebar tabs, tabs that sleep to save memory, its own YouTube player and music app, a password
-manager, an ad blocker, and a Memory saver mode for older computers.
+A small, low-memory, general-purpose web browser for Windows, built on the [Servo](https://servo.org) engine (v0.7.0) in Rust. Current build: **59**.
 
-Pteron is an early test version. Servo does not support every web feature yet, so some sites look
-wrong or do not work (see [Known problems](#known-problems)).
+Pteron is a young prototype. It aims to use little RAM and keep the interface simple: a sidebar with tabs, bookmarks and settings, and a page area that gets the rest of the window. Many modern sites work; some look wrong or do not work yet (see Known problems).
 
-## Features
+## Download
 
-**Browsing**
-- Sidebar with tabs, pinned tabs, bookmarks (one folder level), history and downloads
-- Tabs sleep after a while and wake when clicked; session restore brings tabs back asleep
-- Find in page, reading mode (the **Aa** button), popup blocking
-- Address bar shortcuts: `g`, `ddg`, `yt`, `w`, `gh`, `maps`, `r`, and `i` for pictures
-  (for example `yt lofi`, `i red car`)
-- Themes, accent colours and a custom new tab page (background, tiles)
-- Search engines: DuckDuckGo, Google, Bing, Brave, Startpage or your own SearXNG; optionally
-  search several engines at once (one tab per engine, or one merged results page)
+Get **Pteron-Setup.exe** from the [latest release](https://github.com/Sm0r3s-source/pteron/releases/latest). Windows may show a "protected your PC" warning because the installer is not signed yet: choose **More info**, then **Run anyway**.
 
-**Plume (YouTube) and Plume Music**
-- YouTube search, channels and videos open in simple Pteron pages with a built-in player (up to
-  1080p60, H.264), because Servo has no Media Source Extensions yet
-- Plume Music for listening, with queues, playlists and liked songs
-- Download videos as .mp4 and songs as .mp3 (converted inside Pteron)
+Pteron updates itself: **Settings > About > Check for updates**. Updates are checked against a SHA-256 checksum before they are installed.
 
-**Privacy and security**
-- Ad and tracker blocking for well-known networks (a fixed domain list, not full filter lists)
-- Tracking parts (`utm_*`, `fbclid`, `gclid`, ...) removed from links
-- Do Not Track and Global Privacy Control signals (after a restart)
-- https first: plain http sites are checked for an https version; otherwise a warning page appears
-- Saved passwords on ordinary login forms, locked with your Windows account, kept only on this
-  computer, never synced and never included in problem reports
-- Clear history and cache on exit (optional); sync never carries security switches
-- Updates are checked against a SHA-256 file and refused without one
+## What it does
 
-**Low memory**
-- Settings, Tabs, **Memory saver**: Normal, Low memory and Lowest memory levels trade speed for
-  less RAM (smaller video buffer, earlier tab sleep, fewer helper threads, smaller cache)
-- A memory log is written next to the crash log
-- Typical use on the author's computers: around 100 to 140 MB with a blank tab, more with
-  YouTube open. Measure on your own PC; the numbers depend on the machine
-
-**Web compatibility**
-- Settings, **Web compatibility**: switch on newer web features one by one (IndexedDB, observers,
-  fonts, canvas, storage, container queries). They are off by default because they can make
-  some sites worse
-- After a crash, Pteron starts in safe mode with those features off
-- **Check this page** (tab context menu) writes a small report about what a page is missing
-
-**Other**
-- Sync of bookmarks and settings through a folder you choose
-- Self-update from Settings, About
-- Crash log, problem report file, and a notice with **Open in default browser** for sites that sit
-  behind Cloudflare's check (Pteron cannot pass it)
-
-## Installing and updating
-
-Releases are published on the [Releases page](https://github.com/Sm0r3s-source/pteron/releases)
-as `Pteron-Setup.exe` and a zip. Pteron updates itself from **Settings, About**; nothing is
-installed without your say-so. Windows may warn about the installer because it is not signed yet.
-
-## Building
-
-Pteron is a set of changes on top of a Servo v0.7.0 checkout, not a fork with its own history.
-The update scripts copy the changed files into the checkout and build it.
-
-You need a normal Servo build setup on Windows:
-- Rust (the toolchain Servo pins)
-- Visual Studio Build Tools with the "Desktop development with C++" workload
-- LLVM (`winget install LLVM.LLVM`), so that `lld-link.exe` is on your PATH
-- The other prerequisites listed in the [Servo book](https://book.servo.org)
-
-Then, from the folder with an update:
-
-```
-powershell -ExecutionPolicy Bypass -File .\pteron_updateNN.ps1 -Publish
-```
-
-`-NoBuild` copies the files without building; `-Publish` builds, packages and publishes a release.
-A fully reproducible build (a real Servo fork with a lockfile, built in CI) is planned.
-
-## Where things are
-
-New files are in `ports/servoshell/`. Some of the main ones:
-
-| File | What it does |
-|---|---|
-| `desktop/sidebar.rs`, `desktop/settings_page.rs` | The sidebar and the Settings page (egui) |
-| `youtube.rs`, `innertube.rs`, `streamproxy.rs`, `mp4mux.rs` | Plume: YouTube pages, API, local video helper, MP4 muxer |
-| `music.rs`, `downloads.rs`, `mp3.rs` | Plume Music, downloads, MP3 conversion |
-| `adblock.rs`, `privacy.rs`, `secure.rs`, `passwords.rs` | Blocking, tracking removal, https, passwords |
-| `sync.rs`, `updater.rs`, `library.rs` | Sync, self-update, bookmarks and history |
-| `compat.rs`, `sitecheck.rs`, `crashlog.rs`, `report.rs` | Compatibility, page check, crash and problem reports |
-| `memsaver.rs`, `multisearch.rs`, `util.rs`, `locks.rs` | Memory saver, multi-engine search, shared helpers |
-
-Pteron also makes small changes in Servo's own files (`components/config/prefs.rs`,
-`components/net/http_loader.rs`, `components/servo/servo.rs`, the GStreamer media backend, and the
-media controls).
+- **Sidebar browsing**: tabs (drag to reorder, pin, sleep unused tabs to save memory), bookmarks with folders, downloads, find in page (Ctrl+F), reopen closed tab (Ctrl+Shift+T), page zoom with an on-screen percentage.
+- **Address bar**: suggestions from bookmarks and history, and shortcuts such as `yt lofi`, `w rust`, `gh servo` (also `g`, `ddg`, `maps`, `r`).
+- **Search engines**: DuckDuckGo, Google and others, or your own SearXNG.
+- **Look**: color themes, accent colors, a custom theme from one color, new tab page backgrounds.
+- **Privacy and safety**: ad and tracker blocking, a warning before opening plain http sites, optional history and cache clearing on exit.
+- **Reading mode** (the Aa button) for articles.
+- **Sync** of bookmarks and settings between computers through a folder you choose (for example a cloud-synced folder).
+- **Bookmark import and export** (Chrome, Edge and Firefox files).
+- **Plume**: a simple YouTube player and music view that plays videos up to 1080p60 (H.264).
+- **Report a problem**: saves a small text file with versions, your settings and the newest log, to send to whoever gave you Pteron.
 
 ## Known problems
 
-- Protected (DRM) media does not work: Spotify, Netflix, Disney+ and similar
-- Strict anti-bot checks, including Cloudflare's "Just a moment" page, cannot be passed
-- Some modern pages look wrong, stay blank or load slowly; the engine does not support every web feature
-- Windows only for now; no extensions and no private window
-- The ad blocker uses a fixed list of well-known networks
-- Videos play H.264 up to 1080p60; VP9, AV1 and 4K are not supported
+- Sites with protected (DRM) media do not work: Spotify, Netflix and similar.
+- Sites with strict anti-bot checks may not let you in.
+- Some pages look wrong or load slowly because Servo does not support every web feature yet.
+- No browser extensions, no password manager yet, no private window.
+- Windows only for now. The memory savings have not been measured against other browsers yet.
 
-The same list, kept up to date, is in the browser at `servo:known-issues`.
+The full list is in the app (Settings > About > Known problems).
 
-## Reporting problems
+## Building
 
-Open the sidebar, then **Settings, About, Report a problem**. It saves a small file on your
-Desktop with the details (no passwords). Attach it to an issue.
+This repository holds Pteron's own changes as files laid out like the Servo source tree. To build: check out Servo v0.7.0, copy these folders over it, and run `./mach build -r` (Windows, with the Servo build requirements installed).
 
 ## License
 
-Pteron is released under the [Mozilla Public License 2.0](https://www.mozilla.org/MPL/2.0/), the
-same as Servo.
+Pteron's changes are released under the Mozilla Public License 2.0, the same license as Servo. Servo is a project of the Servo Project Developers.

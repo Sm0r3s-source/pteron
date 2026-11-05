@@ -12,7 +12,7 @@ use crate::streamproxy::UPSTREAM_USER_AGENT;
 
 /// This program's own number. Every release is tagged `build-<number>`; a bigger number than
 /// this one means an update is available. (Raised with every update.)
-pub(crate) const BUILD: u32 = 58;
+pub(crate) const BUILD: u32 = 59;
 
 /// Where releases are published: `https://github.com/<REPO>/releases`.
 pub(crate) const REPO: &str = "Sm0r3s-source/pteron";
@@ -274,6 +274,19 @@ pub(crate) fn fetch_html(url: &str, tag: &str) -> Result<String, String> {
         return Err("no answer".to_string());
     }
     Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Does `host` answer over https (any answer counts, even an error page)? Gives up after 5 seconds.
+pub(crate) fn probe_https(host: &str) -> bool {
+    let url = format!("https://{host}/");
+    with_curl(|mut command| {
+        command
+            .args(["-sS", "-I", "--proto", "=https", "--max-time", "5", "-A", UPSTREAM_USER_AGENT, "--", &url])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    })
+    .is_ok_and(|status| status.success())
 }
 
 /// Looks for a newer release in the background (once per few minutes at most).

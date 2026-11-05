@@ -1023,10 +1023,31 @@ fn privacy_section(
         ui,
         "Secure connections",
         Some("Sites that use plain http can be read and changed by others on the same network."),
-        "https http secure security warning connection",
+        "https http secure security warning connection first upgrade",
         |ui| {
             *changed |= ui
+                .checkbox(&mut settings.https_first, "Use the secure version (https) of a site when it has one")
+                .changed();
+            *changed |= ui
                 .checkbox(&mut settings.https_warning, "Warn me before opening http sites")
+                .changed();
+        },
+    );
+    card(
+        ui,
+        "Tracking",
+        Some(
+            "Links often carry extra parts (utm_source, fbclid and similar) that only tell the \
+             site where you came from. Websites can also be told you do not want to be tracked; \
+             some honour it, many ignore it.",
+        ),
+        "tracking track do not track dnt gpc global privacy control utm fbclid links",
+        |ui| {
+            *changed |= ui
+                .checkbox(&mut settings.strip_tracking, "Remove tracking parts from addresses")
+                .changed();
+            *changed |= ui
+                .checkbox(&mut settings.privacy_signals, "Send Do Not Track and Global Privacy Control (after a restart)")
                 .changed();
         },
     );

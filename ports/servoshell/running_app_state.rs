@@ -839,9 +839,19 @@ impl WebViewDelegate for RunningAppState {
             }
             return;
         }
-        // Pteron: plain http sites get a warning page first (with a way to go on).
+        // Pteron: links lose their tracking parts (utm_*, fbclid, ...); the cleaned address
+        // goes through these checks again.
+        if crate::pteron::settings().strip_tracking &&
+            let Some(clean) = crate::privacy::strip_tracking(&navigation_request.url)
+        {
+            navigation_request.deny();
+            webview.load(clean);
+            return;
+        }
+        // Pteron: plain http sites are checked for an https version, or get a warning page
+        // first (with a way to go on).
         if crate::secure::needs_warning(&navigation_request.url) &&
-            let Some(page) = crate::secure::warning_url(&navigation_request.url)
+            let Some(page) = crate::secure::instead_of(&navigation_request.url)
         {
             navigation_request.deny();
             webview.load(page);

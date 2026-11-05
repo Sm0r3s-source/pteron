@@ -112,12 +112,7 @@ pub(crate) fn start_page(query: &str, engines: &[String]) -> Option<Url> {
 }
 
 fn page_key(query: &str, engines: &[String]) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in query.bytes().chain(engines.join(",").bytes()) {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("s{hash:016x}")
+    format!("s{}", crate::util::fnv_hex(&format!("{query}\n{}", engines.join(","))))
 }
 
 struct EngineResult {

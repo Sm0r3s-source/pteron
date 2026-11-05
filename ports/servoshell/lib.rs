@@ -38,6 +38,7 @@ mod compat;
 mod locks;
 mod util;
 mod memsaver;
+mod privacy;
 mod multisearch;
 mod secure;
 mod sitecheck;

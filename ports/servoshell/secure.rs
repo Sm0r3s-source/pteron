@@ -77,9 +77,10 @@ fn is_private_host(host: &str) -> bool {
         host.ends_with(".home.arpa")
 }
 
-/// Should this navigation show the warning instead of loading?
+/// Should this navigation be held back (warning, or a check for a secure version first)?
 pub(crate) fn needs_warning(url: &Url) -> bool {
-    if url.scheme() != "http" || !crate::pteron::settings().https_warning {
+    let settings = crate::pteron::settings();
+    if url.scheme() != "http" || !(settings.https_warning || settings.https_first) {
         return false;
     }
     match url.host_str() {
@@ -90,6 +91,85 @@ pub(crate) fn needs_warning(url: &Url) -> bool {
 
 fn encode(text: &str) -> String {
     url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
+}
+
+// ---------------------------------------------------------------- https first
+
+/// Hosts already tried: `true` when they answer over https.
+fn probed() -> &'static Mutex<std::collections::HashMap<String, bool>> {
+    static PROBED: OnceLock<Mutex<std::collections::HashMap<String, bool>>> = OnceLock::new();
+    PROBED.get_or_init(Default::default)
+}
+
+#[derive(Debug, PartialEq)]
+enum Next {
+    /// Go straight to the https version.
+    Secure,
+    /// Show the warning (or load http when the warning is off).
+    Warn,
+    /// Find out first whether https works.
+    Check,
+}
+
+fn decide(https_first: bool, known: Option<bool>) -> Next {
+    match (https_first, known) {
+        (false, _) | (_, Some(false)) => Next::Warn,
+        (true, Some(true)) => Next::Secure,
+        (true, None) => Next::Check,
+    }
+}
+
+/// What to load instead of the plain `http` page `url` (see [`needs_warning`]).
+pub(crate) fn instead_of(url: &Url) -> Option<Url> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    let known = crate::locks::LockExt::lock_ok(probed()).get(&host).copied();
+    match decide(crate::pteron::settings().https_first, known) {
+        Next::Secure => secure_version(url),
+        Next::Warn => warning_or_page(url),
+        Next::Check => check_page(url, host),
+    }
+}
+
+/// The warning page, or (with the warning switched off) the site itself.
+fn warning_or_page(url: &Url) -> Option<Url> {
+    if crate::pteron::settings().https_warning {
+        warning_url(url)
+    } else {
+        allow_host(url.host_str()?);
+        Some(url.clone())
+    }
+}
+
+/// The page shown once the check is done: on to https, or the warning.
+fn result_html(url: &Url, secure: bool) -> String {
+    let go = match secure_version(url) {
+        Some(https) if secure => https.to_string(),
+        _ if crate::pteron::settings().https_warning => return warning_html(&warning_url(url).unwrap_or_else(|| url.clone())),
+        _ => {
+            allow_host(url.host_str().unwrap_or_default());
+            url.to_string()
+        },
+    };
+    let go = escape(&go);
+    format!("<!doctype html><title>Opening...</title><meta http-equiv=\"refresh\" content=\"0;url={go}\"><p><a href=\"{go}\">Continue</a></p>")
+}
+
+/// Shows a short "checking" page and, in the background, finds out whether the site answers
+/// over https. The page then moves on by itself.
+fn check_page(url: &Url, host: String) -> Option<Url> {
+    let key = format!("h{}", crate::util::fnv_hex(url.as_str()));
+    let path = crate::youtube::page_path(&key)?;
+    if crate::youtube::is_ready(&key) {
+        crate::youtube::write_page(&key, &crate::youtube::loading_html("Checking for a secure version...", &key));
+        let target = url.clone();
+        let job_key = key.clone();
+        crate::youtube::spawn_job(&key, move || {
+            let secure = crate::updater::probe_https(&host);
+            crate::locks::LockExt::lock_ok(probed()).insert(host, secure);
+            crate::youtube::write_page(&job_key, &result_html(&target, secure));
+        });
+    }
+    Url::from_file_path(path).ok()
 }
 
 /// The address of the warning page for `target`.
@@ -216,6 +296,24 @@ mod tests {
         let other = Url::parse("servo:http-continue?url=https%3A%2F%2Fexample.com").unwrap();
         assert!(!continue_html(&other).contains("refresh"));
         let _ = issue_token();
+    }
+
+    #[test]
+    fn https_first_decisions() {
+        assert_eq!(decide(true, None), Next::Check);
+        assert_eq!(decide(true, Some(true)), Next::Secure);
+        assert_eq!(decide(true, Some(false)), Next::Warn);
+        assert_eq!(decide(false, None), Next::Warn);
+        assert_eq!(decide(false, Some(true)), Next::Warn);
+    }
+
+    #[test]
+    fn the_result_page_moves_on() {
+        let site = Url::parse("http://old.example:8080/a?b=1").unwrap();
+        let html = result_html(&site, true);
+        assert!(html.contains("refresh") && html.contains("url=https://old.example/a?b=1"));
+        let html = result_html(&site, false);
+        assert!(html.contains("not secure") && html.contains("http-continue"));
     }
 
     #[test]

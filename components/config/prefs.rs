@@ -365,6 +365,8 @@ pub struct Preferences {
     /// The weight of the http memory cache
     /// Notice that this is not equal to the number of different urls in the cache.
     pub network_http_cache_size: u64,
+    /// Pteron: send `DNT: 1` and `Sec-GPC: 1` with every request.
+    pub network_privacy_signals: bool,
     pub network_local_directory_listing_enabled: bool,
     /// Force the use of `rust-webpki` verification for CA roots. If this is false (the
     /// default), then `rustls-platform-verifier` will be used, except on Android where
@@ -580,6 +582,7 @@ impl Preferences {
             network_https_proxy_uri: String::new(),
             network_http_no_proxy: String::new(),
             network_http_cache_size: 5000,
+            network_privacy_signals: false,
             network_local_directory_listing_enabled: true,
             network_use_webpki_roots: false,
             network_max_content_length: 5 * 1024 * 1024,

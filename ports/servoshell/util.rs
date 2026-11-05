@@ -55,6 +55,14 @@ pub(crate) fn random_token() -> String {
         .collect()
 }
 
+/// 16 hex digits identifying `text` (FNV-1a), for file and page names.
+pub(crate) fn fnv_hex(text: &str) -> String {
+    let hash = text
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3));
+    format!("{hash:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +78,13 @@ mod tests {
         assert_eq!(b64_decode("aHR0cHM6Ly9leGFtcGxlLm5ldC9wYWdl").unwrap(), b"https://example.net/page");
         assert_eq!(b64_decode("-_-_").unwrap(), b64_decode("+/+/").unwrap());
         assert!(b64_decode("a$b").is_none());
+    }
+
+    #[test]
+    fn names_are_stable() {
+        assert_eq!(fnv_hex("a"), fnv_hex("a"));
+        assert_ne!(fnv_hex("a"), fnv_hex("b"));
+        assert_eq!(fnv_hex("").len(), 16);
     }
 
     #[test]

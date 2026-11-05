@@ -601,6 +601,8 @@ fn update_preferences_from_command_line_arguments(
         preferences.set_value(pref_name, pref_value);
     }
 
+    preferences.network_privacy_signals = crate::pteron::settings().privacy_signals;
+
     // Pteron: memory saver trims thread pools and the HTTP cache (command line still wins).
     {
         let profile = crate::memsaver::profile(crate::memsaver::Level::from_id(
