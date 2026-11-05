@@ -290,38 +290,13 @@ pub(crate) fn parse_duckduckgo(html: &str) -> Vec<Hit> {
     hits
 }
 
-fn base64url_decode(text: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut buffer = 0u32;
-    let mut bits = 0;
-    for c in text.chars() {
-        let value = match c {
-            'A'..='Z' => c as u32 - 'A' as u32,
-            'a'..='z' => c as u32 - 'a' as u32 + 26,
-            '0'..='9' => c as u32 - '0' as u32 + 52,
-            '-' | '+' => 62,
-            '_' | '/' => 63,
-            '=' => break,
-            _ => return None,
-        };
-        buffer = (buffer << 6) | value;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buffer >> bits) as u8);
-            buffer &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
-}
-
 /// Bing wraps result links in a redirect (`/ck/a?...&u=a1<base64 of the address>`).
 fn unwrap_bing(href: &str) -> Option<String> {
     let url = Url::parse(href).ok()?;
     if url.host_str().is_some_and(|h| h.ends_with("bing.com")) && url.path().starts_with("/ck/") {
         let (_, value) = url.query_pairs().find(|(k, _)| k == "u")?;
         let encoded = value.strip_prefix("a1")?;
-        let bytes = base64url_decode(encoded)?;
+        let bytes = crate::util::b64_decode(encoded)?;
         return web_url(&String::from_utf8(bytes).ok()?);
     }
     web_url(href)

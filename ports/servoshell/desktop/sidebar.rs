@@ -819,28 +819,33 @@ fn downloads_section(ui: &mut egui::Ui) {
     }
 }
 
+/// Drag to reorder: remembers which row was picked up, draws a line where it would land, and
+/// returns `(from, to)` when it is dropped on this row.
+fn drag_to_reorder(ui: &egui::Ui, key: &str, index: usize, rect: Rect, response: &egui::Response) -> Option<(usize, usize)> {
+    let key = Id::new(key);
+    if response.drag_started() {
+        ui.memory_mut(|memory| memory.data.insert_temp(key, index));
+    }
+    let from: usize = ui.memory(|memory| memory.data.get_temp(key))?;
+    if from == index ||
+        !ui.rect_contains_pointer(rect) ||
+        !ui.input(|input| input.pointer.is_decidedly_dragging() || input.pointer.any_released())
+    {
+        return None;
+    }
+    let y = if from > index { rect.min.y } else { rect.max.y };
+    ui.painter().line_segment(
+        [pos2(rect.min.x + 4.0, y), pos2(rect.max.x - 4.0, y)],
+        Stroke::new(2.0, accent_color()),
+    );
+    ui.input(|input| input.pointer.any_released()).then_some((from, index))
+}
+
 fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Action>) {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click_and_drag());
-    // Drag to reorder: remember which row was picked up, show a line where it would land.
-    let drag_key = Id::new("pteron_tab_drag");
-    if response.drag_started() {
-        ui.memory_mut(|memory| memory.data.insert_temp(drag_key, index));
-    }
-    let dragged: Option<usize> = ui.memory(|memory| memory.data.get_temp(drag_key));
-    if let Some(from) = dragged &&
-        from != index &&
-        ui.rect_contains_pointer(rect) &&
-        ui.input(|input| input.pointer.is_decidedly_dragging() || input.pointer.any_released())
-    {
-        let y = if from > index { rect.min.y } else { rect.max.y };
-        ui.painter().line_segment(
-            [pos2(rect.min.x + 4.0, y), pos2(rect.max.x - 4.0, y)],
-            Stroke::new(2.0, accent_color()),
-        );
-        if ui.input(|input| input.pointer.any_released()) {
-            actions.push(Action::MoveTab { from, to: index });
-        }
+    if let Some((from, to)) = drag_to_reorder(ui, "pteron_tab_drag", index, rect, &response) {
+        actions.push(Action::MoveTab { from, to });
     }
     let close_rect = Rect::from_min_size(
         pos2(rect.max.x - 26.0, rect.min.y + 2.0),
@@ -1015,27 +1020,10 @@ fn bookmark_row(
         vec2(ui.available_width(), ROW_HEIGHT),
         if can_drag { Sense::click_and_drag() } else { Sense::click() },
     );
-    // Drag to reorder, like tabs.
-    let drag_key = Id::new("pteron_bookmark_drag");
-    if can_drag {
-        if response.drag_started() {
-            ui.memory_mut(|memory| memory.data.insert_temp(drag_key, index));
-        }
-        let dragged: Option<usize> = ui.memory(|memory| memory.data.get_temp(drag_key));
-        if let Some(from) = dragged &&
-            from != index &&
-            ui.rect_contains_pointer(rect) &&
-            ui.input(|input| input.pointer.is_decidedly_dragging() || input.pointer.any_released())
-        {
-            let y = if from > index { rect.min.y } else { rect.max.y };
-            ui.painter().line_segment(
-                [pos2(rect.min.x + 4.0, y), pos2(rect.max.x - 4.0, y)],
-                Stroke::new(2.0, accent_color()),
-            );
-            if ui.input(|input| input.pointer.any_released()) {
-                actions.push(Action::MoveBookmarkTo { from, to: index });
-            }
-        }
+    if can_drag &&
+        let Some((from, to)) = drag_to_reorder(ui, "pteron_bookmark_drag", index, rect, &response)
+    {
+        actions.push(Action::MoveBookmarkTo { from, to });
     }
     let visuals = ui.visuals();
     let fill = response

@@ -12,7 +12,7 @@ use crate::streamproxy::UPSTREAM_USER_AGENT;
 
 /// This program's own number. Every release is tagged `build-<number>`; a bigger number than
 /// this one means an update is available. (Raised with every update.)
-pub(crate) const BUILD: u32 = 56;
+pub(crate) const BUILD: u32 = 58;
 
 /// Where releases are published: `https://github.com/<REPO>/releases`.
 pub(crate) const REPO: &str = "Sm0r3s-source/pteron";
@@ -450,12 +450,15 @@ fn download(release: &Release) -> Result<PathBuf, String> {
     if release.size > 0 && size != release.size {
         return Err("The download is incomplete. Try again.".into());
     }
-    if let Some(url) = &release.sha256_url {
-        let expected = parse_sha256(&fetch_text(url)?).ok_or("The checksum file is not readable.")?;
-        if sha256_of(&zip)? != expected {
-            let _ = std::fs::remove_file(&zip);
-            return Err("The download does not match its checksum, so it was not used.".into());
-        }
+    // No checksum file means nothing to check the download against: do not install it.
+    let Some(url) = &release.sha256_url else {
+        let _ = std::fs::remove_file(&zip);
+        return Err("This release has no checksum file, so it was not installed.".into());
+    };
+    let expected = parse_sha256(&fetch_text(url)?).ok_or("The checksum file is not readable.")?;
+    if sha256_of(&zip)? != expected {
+        let _ = std::fs::remove_file(&zip);
+        return Err("The download does not match its checksum, so it was not used.".into());
     }
     Ok(zip)
 }

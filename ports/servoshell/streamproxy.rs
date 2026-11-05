@@ -16,6 +16,7 @@
 //! Downloads from YouTube use `curl.exe` (part of Windows 10 and later), so Pteron needs no
 //! extra libraries. Only `https://*.googlevideo.com/` addresses are ever fetched.
 
+use crate::locks::LockExt;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
@@ -94,7 +95,7 @@ impl Session {
 
     /// Start downloading piece `index` in the background unless it already is.
     fn start(self: &Arc<Self>, index: usize) -> Arc<Slot> {
-        let mut slots = self.slots.lock().unwrap();
+        let mut slots = self.slots.lock_ok();
         if let Some(slot) = slots.get(&index) {
             return slot.clone();
         }
@@ -105,14 +106,14 @@ impl Session {
             let result = session.download(index).map(Arc::new).map_err(|e| e.to_string());
             if result.is_err() {
                 // a failed piece is asked for again next time
-                session.slots.lock().unwrap().remove(&index);
+                session.slots.lock_ok().remove(&index);
             }
-            *filler.data.lock().unwrap() = Some(result);
+            *filler.data.lock_ok() = Some(result);
             filler.ready.notify_all();
         });
         if spawned.is_err() {
             slots.remove(&index);
-            *slot.data.lock().unwrap() = Some(Err("could not start a download".into()));
+            *slot.data.lock_ok() = Some(Err("could not start a download".into()));
         }
         slot
     }
@@ -120,7 +121,7 @@ impl Session {
     /// Wait for piece `index`.
     fn get(self: &Arc<Self>, index: usize) -> Result<Arc<Vec<u8>>, String> {
         let slot = self.start(index);
-        let mut data = slot.data.lock().unwrap();
+        let mut data = slot.data.lock_ok();
         while data.is_none() {
             data = slot.ready.wait(data).unwrap();
         }
@@ -141,7 +142,7 @@ impl Session {
             self.start(next);
             last = next;
         }
-        self.slots.lock().unwrap().retain(|i, _| *i + 2 > index && *i <= last + 2);
+        self.slots.lock_ok().retain(|i, _| *i + 2 > index && *i <= last + 2);
     }
 }
 
@@ -165,23 +166,6 @@ pub(crate) struct Proxy {
     building: Arc<Mutex<()>>,
 }
 
-fn random_token() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let mut out = String::new();
-    for _ in 0..2 {
-        let mut hasher = RandomState::new().build_hasher();
-        hasher.write_u128(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0),
-        );
-        out.push_str(&format!("{:016x}", hasher.finish()));
-    }
-    out
-}
-
 impl Proxy {
     pub(crate) fn start(one: Fetcher, many: BatchFetcher) -> Result<Proxy, String> {
         let net = Net { one, many };
@@ -189,7 +173,7 @@ impl Proxy {
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let state = Arc::new(Mutex::new(State {
-            suggest_token: random_token(),
+            suggest_token: crate::util::random_token(),
             ..State::default()
         }));
         let thread_state = state.clone();
@@ -231,8 +215,8 @@ impl Proxy {
 
     /// Remember the streams of one video. Returns the token for its URLs.
     pub(crate) fn register(&self, set: VideoSet) -> String {
-        let token = random_token();
-        let mut state = self.state.lock().unwrap();
+        let token = crate::util::random_token();
+        let mut state = self.state.lock_ok();
         state.sets.push((token.clone(), Arc::new(set)));
         if state.sets.len() > MAX_SETS {
             let (old, _) = state.sets.remove(0);
@@ -248,32 +232,32 @@ impl Proxy {
 
     /// Address (without the `?q=...`) a page can use to get search suggestions.
     pub(crate) fn suggest_url(&self) -> String {
-        format!("http://127.0.0.1:{}/s/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/s/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     pub(crate) fn ready_url(&self) -> String {
-        format!("http://127.0.0.1:{}/w/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/w/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     pub(crate) fn memory_url(&self) -> String {
-        format!("http://127.0.0.1:{}/o/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/o/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     pub(crate) fn search_more_url(&self) -> String {
-        format!("http://127.0.0.1:{}/q/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/q/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     pub(crate) fn comments_url(&self) -> String {
-        format!("http://127.0.0.1:{}/c/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/c/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     pub(crate) fn more_url(&self) -> String {
-        format!("http://127.0.0.1:{}/m/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/m/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     /// Address the Music page sends its commands to (`?x=search:...`).
     pub(crate) fn music_url(&self) -> String {
-        format!("http://127.0.0.1:{}/u/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/u/{}", self.port, self.state.lock_ok().suggest_token)
     }
 
     /// Whether this is an address of the helper's video files (the only thing a Plume download
@@ -295,7 +279,7 @@ impl Proxy {
     /// Address that starts building the whole file in the background and answers `1` once it
     /// is ready (`?k=<token>_<itag>`).
     pub(crate) fn full_url(&self) -> String {
-        format!("http://127.0.0.1:{}/f/{}", self.port, self.state.lock().unwrap().suggest_token)
+        format!("http://127.0.0.1:{}/f/{}", self.port, self.state.lock_ok().suggest_token)
     }
 }
 
@@ -396,7 +380,7 @@ fn session_for(
     partial: bool,
 ) -> Result<Arc<Session>, String> {
     let find = || {
-        let guard = state.lock().unwrap();
+        let guard = state.lock_ok();
         guard.sessions.iter().find(|((t, i, p), _)| t == token && *i == itag && *p == partial).map(|(_, s)| s.clone())
     };
     if let Some(s) = find() {
@@ -408,7 +392,7 @@ fn session_for(
         return Ok(s);
     }
     let set = {
-        let guard = state.lock().unwrap();
+        let guard = state.lock_ok();
         guard.sets.iter().find(|(t, _)| t == token).map(|(_, s)| s.clone()).ok_or("unknown video")?
     };
     if itag == AUDIO_ONLY {
@@ -427,7 +411,7 @@ fn session_for(
             net: net.clone(),
             slots: Mutex::new(std::collections::HashMap::new()),
         });
-        let mut guard = state.lock().unwrap();
+        let mut guard = state.lock_ok();
         guard.sessions.push(((token.to_string(), itag, false), session.clone()));
         if guard.sessions.len() > MAX_SESSIONS {
             guard.sessions.remove(0);
@@ -440,7 +424,7 @@ fn session_for(
     let cached_audio = if partial {
         None
     } else {
-        let guard = state.lock().unwrap();
+        let guard = state.lock_ok();
         guard.audio.iter().find(|(t, _)| t == token).map(|(_, a)| a.clone())
     };
     let audio_job = match cached_audio {
@@ -457,7 +441,7 @@ fn session_for(
         Ok(job) => {
             let made = Arc::new(job.join().map_err(|_| "audio download failed".to_string())??);
             if !partial {
-                let mut guard = state.lock().unwrap();
+                let mut guard = state.lock_ok();
                 guard.audio.push((token.to_string(), made.clone()));
                 if guard.audio.len() > 4 {
                     guard.audio.remove(0);
@@ -486,7 +470,7 @@ fn session_for(
         net: net.clone(),
         slots: Mutex::new(std::collections::HashMap::new()),
     });
-    let mut guard = state.lock().unwrap();
+    let mut guard = state.lock_ok();
     guard.sessions.push(((token.to_string(), itag, partial), session.clone()));
     if guard.sessions.len() > MAX_SESSIONS {
         guard.sessions.remove(0);
@@ -501,7 +485,7 @@ fn full_status(state: &Arc<Mutex<State>>, net: &Net, building: &Arc<Mutex<()>>, 
         return "0";
     };
     {
-        let mut guard = state.lock().unwrap();
+        let mut guard = state.lock_ok();
         if guard.sessions.iter().any(|((t, i, p), _)| t == token && *i == itag && !*p) {
             return "1";
         }
@@ -517,7 +501,7 @@ fn full_status(state: &Arc<Mutex<State>>, net: &Net, building: &Arc<Mutex<()>>, 
             crate::crashlog::note(&format!("video helper: whole file for itag {itag} failed: {message}"));
         }
         // a failure may be tried again later
-        state.lock().unwrap().starting.retain(|(t, i)| !(*t == token && *i == itag));
+        state.lock_ok().starting.retain(|(t, i)| !(*t == token && *i == itag));
     });
     "0"
 }
@@ -541,7 +525,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<State>>, net: &Net
     if head.method != "GET" && head.method != "HEAD" {
         return fail(&mut stream, "405 Method Not Allowed");
     }
-    let helper_token = state.lock().unwrap().suggest_token.clone();
+    let helper_token = state.lock_ok().suggest_token.clone();
     if let Some((kind, value)) = helper_request(&head.path, &helper_token) {
         let (content_type, body) = match kind {
             's' => ("application/json", serde_json::to_string(&suggestions(&value)).unwrap_or_else(|_| "[]".into())),
@@ -577,7 +561,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<State>>, net: &Net
     };
     let total = session.layout.total;
     let (code, start, end, extra) = match head.range.as_deref() {
-        None => ("200 OK", 0, total - 1, String::new()),
+        None => ("200 OK", 0, total.saturating_sub(1), String::new()),
         Some(r) => match parse_range(r, total) {
             Some((s, e)) => ("206 Partial Content", s, e, format!("Content-Range: bytes {s}-{e}/{total}\r\n")),
             None => {
@@ -628,8 +612,14 @@ fn stream_range_counted(
         let bytes = session.get(index)?;
         session.read_ahead(index);
         let piece_start = layout.pieces[index].out_start;
+        if bytes.is_empty() {
+            return Err("empty piece".to_string());
+        }
         let from = (pos - piece_start) as usize;
         let to = ((end - piece_start) as usize).min(bytes.len() - 1);
+        if from > to {
+            return Err("piece shorter than expected".to_string());
+        }
         out.write_all(&bytes[from..=to]).map_err(|e| e.to_string())?;
         *sent += (to - from + 1) as u64;
         pos = piece_start + to as u64 + 1;
@@ -747,7 +737,7 @@ const COOL_DOWN: Duration = Duration::from_secs(5);
 
 fn wait_gate() {
     loop {
-        let until = *BLOCKED_UNTIL.lock().unwrap();
+        let until = *BLOCKED_UNTIL.lock_ok();
         match until {
             Some(t) if t > std::time::Instant::now() => {
                 std::thread::sleep((t - std::time::Instant::now()).min(Duration::from_millis(400)));
@@ -757,13 +747,9 @@ fn wait_gate() {
     }
 }
 
-fn throttled(why: &str) {
-    throttled_for(why, COOL_DOWN);
-}
-
 /// Everything pauses for `pause` (never shortening a longer pause already running).
 fn throttled_for(why: &str, pause: Duration) {
-    let mut guard = BLOCKED_UNTIL.lock().unwrap();
+    let mut guard = BLOCKED_UNTIL.lock_ok();
     let now = std::time::Instant::now();
     let fresh = guard.is_none_or(|t| t < now);
     let until = now + pause;
@@ -779,8 +765,7 @@ fn throttled_for(why: &str, pause: Duration) {
 fn yield_to_data() {
     for _ in 0..30 {
         let busy = LAST_DATA
-            .lock()
-            .unwrap()
+            .lock_ok()
             .is_some_and(|t| t.elapsed() < Duration::from_millis(500));
         if !busy {
             return;
@@ -794,7 +779,7 @@ struct DataSlot;
 impl DataSlot {
     fn take() -> DataSlot {
         let (lock, cv) = &DATA_SLOTS;
-        let mut used = lock.lock().unwrap();
+        let mut used = lock.lock_ok();
         while *used >= MAX_DATA_DOWNLOADS {
             used = cv.wait(used).unwrap();
         }
@@ -806,7 +791,7 @@ impl DataSlot {
 impl Drop for DataSlot {
     fn drop(&mut self) {
         let (lock, cv) = &DATA_SLOTS;
-        *lock.lock().unwrap() -= 1;
+        *lock.lock_ok() -= 1;
         cv.notify_one();
     }
 }
@@ -834,12 +819,12 @@ pub(crate) fn curl_range(url: &str, start: u64, len: u64) -> Result<Vec<u8>, Str
             std::thread::sleep(Duration::from_millis((400 * attempt).min(if small { 1500 } else { 4000 })));
         }
         wait_gate();
-        *LAST_DATA.lock().unwrap() = Some(std::time::Instant::now());
+        *LAST_DATA.lock_ok() = Some(std::time::Instant::now());
         let mut command = curl_command();
         command
             .args(["-sS", "--fail", "--proto", "=https", "--max-time", "60", "-A", UPSTREAM_USER_AGENT])
             .arg("-r")
-            .arg(format!("{}-{}", start, start + len - 1))
+            .arg(format!("{}-{}", start, start + len.saturating_sub(1)))
             .arg("--")
             .arg(url)
             .stdin(Stdio::null())
@@ -1208,9 +1193,9 @@ mod tests {
         assert!(!allowed_host("https://googlevideo.com.evil.example/x"));
         assert!(!allowed_host("https://evil.example/googlevideo.com"));
         assert!(curl_range("https://evil.example/x", 0, 10).is_err());
-        let a = random_token();
+        let a = crate::util::random_token();
         assert_eq!(a.len(), 32);
-        assert_ne!(a, random_token());
+        assert_ne!(a, crate::util::random_token());
     }
 
     fn make(dir: &std::path::Path, secs: u32) -> (Vec<u8>, Vec<u8>) {

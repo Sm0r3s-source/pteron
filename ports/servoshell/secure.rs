@@ -17,6 +17,35 @@ fn allowed() -> &'static Mutex<HashSet<String>> {
     ALLOWED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// One-time codes handed out with each warning page. "Continue anyway" only works with a code
+/// from a warning page that was just shown, so a web page cannot silence the warning by
+/// loading `servo:http-continue` itself (it cannot read the warning page to get a code).
+fn tokens() -> &'static Mutex<Vec<String>> {
+    static TOKENS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    TOKENS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn issue_token() -> String {
+    let token = crate::util::random_token();
+    let mut list = crate::locks::LockExt::lock_ok(tokens());
+    if list.len() >= 32 {
+        list.remove(0);
+    }
+    list.push(token.clone());
+    token
+}
+
+fn use_token(token: &str) -> bool {
+    let mut list = crate::locks::LockExt::lock_ok(tokens());
+    match list.iter().position(|t| t == token) {
+        Some(at) => {
+            list.remove(at);
+            true
+        },
+        None => false,
+    }
+}
+
 pub(crate) fn allow_host(host: &str) {
     if let Ok(mut set) = allowed().lock() {
         set.insert(host.to_ascii_lowercase());
@@ -100,13 +129,14 @@ pub(crate) fn warning_html(page_url: &Url) -> String {
 what you send and change what you see. Do not type passwords or card numbers here.</p>\
 <div class=card><h2>What do you want to do?</h2>\
 <p><a class=btn href=\"{}\">Try the secure version (https)</a></p>\
-<p><a href=\"servo:http-continue?url={}\">Continue to the site anyway</a> (remembered until you close Pteron)</p>\
+<p><a href=\"servo:http-continue?url={}&amp;t={}\">Continue to the site anyway</a> (remembered until you close Pteron)</p>\
 <p><a href=\"servo:newtab\">Go to the new tab page</a></p></div>\
 <p class=sub>You can turn this warning off in Settings &rarr; Privacy &amp; data.</p>",
         crate::pteron::PAGE_STYLE_PUBLIC,
         escape(&host),
         escape(&secure),
         encode(target.as_str()),
+        issue_token(),
     )
 }
 
@@ -115,6 +145,10 @@ pub(crate) fn continue_html(page_url: &Url) -> String {
     let Some(target) = target_from(page_url) else {
         return "<!doctype html><title>Not secure</title><p>This address cannot be opened.</p>".to_string();
     };
+    let token = page_url.query_pairs().find(|(key, _)| key == "t").map(|(_, v)| v.to_string());
+    if !token.as_deref().is_some_and(use_token) {
+        return "<!doctype html><title>Not secure</title><p>Use the button on the warning page to continue.</p>".to_string();
+    }
     if let Some(host) = target.host_str() {
         allow_host(host);
     }
@@ -156,9 +190,21 @@ mod tests {
         let page = warning_url(&target).unwrap();
         let html = warning_html(&page);
         assert!(html.contains("https://remember-me.example/a?b=1&amp;c=2"));
-        let go = Url::parse(&format!("servo:http-continue?url={}", encode(target.as_str()))).unwrap();
+        // Without the code from the warning page, "continue" does nothing.
+        let bare = Url::parse(&format!("servo:http-continue?url={}", encode(target.as_str()))).unwrap();
+        assert!(!continue_html(&bare).contains("refresh"));
+        let wrong = Url::parse(&format!("servo:http-continue?url={}&t=nope", encode(target.as_str()))).unwrap();
+        assert!(!continue_html(&wrong).contains("refresh"));
+        assert!(needs_warning(&target));
+        // The warning page's own link carries a working one-time code.
+        let start = html.find("http-continue?").unwrap();
+        let end = html[start..].find('"').unwrap() + start;
+        let link = html[start..end].replace("&amp;", "&");
+        let go = Url::parse(&format!("servo:{link}")).unwrap();
         assert!(continue_html(&go).contains("refresh"));
         assert!(!needs_warning(&target));
+        // ...which works only once.
+        assert!(!continue_html(&go).contains("refresh"));
         assert!(!needs_warning(&Url::parse("http://REMEMBER-ME.example/other").unwrap()));
     }
 
@@ -169,6 +215,7 @@ mod tests {
         assert!(!continue_html(&bad).contains("refresh"));
         let other = Url::parse("servo:http-continue?url=https%3A%2F%2Fexample.com").unwrap();
         assert!(!continue_html(&other).contains("refresh"));
+        let _ = issue_token();
     }
 
     #[test]

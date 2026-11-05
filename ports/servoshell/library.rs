@@ -277,10 +277,6 @@ pub(crate) fn clear_history() {
     });
 }
 
-pub(crate) fn history_len() -> usize {
-    with(|data| data.history.len()).unwrap_or(0)
-}
-
 pub(crate) fn bookmarks() -> Vec<Bookmark> {
     with(|data| data.bookmarks.clone()).unwrap_or_default()
 }

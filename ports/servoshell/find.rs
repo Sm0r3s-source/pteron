@@ -62,13 +62,6 @@ pub(crate) fn script(query: &str, direction: i32) -> String {
     format!("({JS})({quoted},{direction})")
 }
 
-pub(crate) fn parse_result(value: &str) -> (usize, usize) {
-    let mut parts = value.split('/');
-    let current = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let total = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    (current, total)
-}
-
 const JS: &str = r#"function (q, dir) {
   var S = window.__pteronFind || (window.__pteronFind = { marks: [], cur: -1, q: '' });
   function clear() {
@@ -135,12 +128,6 @@ mod tests {
         assert!(s.ends_with(r#"("a\"b\\c",1)"#));
     }
 
-    #[test]
-    fn reads_results() {
-        assert_eq!(parse_result("3/12"), (3, 12));
-        assert_eq!(parse_result("0/0"), (0, 0));
-        assert_eq!(parse_result("junk"), (0, 0));
-    }
 
     #[test]
     fn dump_script() {

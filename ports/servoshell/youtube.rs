@@ -18,6 +18,7 @@
 //! * Only `https://*.googlevideo.com/` addresses are downloaded, and the local server only
 //!   answers on 127.0.0.1 for unguessable addresses.
 
+use crate::locks::LockExt;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -84,17 +85,17 @@ pub(crate) enum Action {
 static IN_FLIGHT: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 fn begin_job(key: &str) -> bool {
-    let mut guard = IN_FLIGHT.lock().unwrap();
+    let mut guard = IN_FLIGHT.lock_ok();
     guard.get_or_insert_with(HashSet::new).insert(key.to_string())
 }
 
 /// Whether the page for `key` has finished loading (nothing is still working on it).
 pub(crate) fn is_ready(key: &str) -> bool {
-    !IN_FLIGHT.lock().unwrap().as_ref().is_some_and(|set| set.contains(key))
+    !IN_FLIGHT.lock_ok().as_ref().is_some_and(|set| set.contains(key))
 }
 
 fn end_job(key: &str) {
-    if let Some(set) = IN_FLIGHT.lock().unwrap().as_mut() {
+    if let Some(set) = IN_FLIGHT.lock_ok().as_mut() {
         set.remove(key);
     }
 }
@@ -841,16 +842,18 @@ fn card(item: &VideoItem) -> String {
     )
 }
 
-/// The next batch of a channel's videos, as JSON for the "Show more" button.
-pub(crate) fn more_json(token: &str) -> String {
-    match innertube::more(token) {
-        Ok((items, next)) => serde_json::json!({
-            "html": items.iter().map(card).collect::<String>(),
-            "next": next,
-        })
-        .to_string(),
-        Err(message) => serde_json::json!({"html": "", "next": null, "error": message}).to_string(),
+/// A batch of cards as JSON for the "Show more" button.
+fn batch_json(batch: Result<(Vec<VideoItem>, Option<String>), String>) -> String {
+    match batch {
+        Ok((items, next)) => serde_json::json!({ "html": items.iter().map(card).collect::<String>(), "next": next }),
+        Err(message) => serde_json::json!({"html": "", "next": null, "error": message}),
     }
+    .to_string()
+}
+
+/// The next batch of a channel's videos.
+pub(crate) fn more_json(token: &str) -> String {
+    batch_json(innertube::more(token))
 }
 
 /// "Show more" button (it also presses itself near the bottom of the page) that appends the
@@ -874,14 +877,7 @@ fn more_block(token: &str, endpoint: &str) -> String {
 }
 
 pub(crate) fn search_more_json(token: &str) -> String {
-    match innertube::search_more(token) {
-        Ok((items, next)) => serde_json::json!({
-            "html": items.iter().map(card).collect::<String>(),
-            "next": next,
-        })
-        .to_string(),
-        Err(message) => serde_json::json!({"html": "", "next": null, "error": message}).to_string(),
-    }
+    batch_json(innertube::search_more(token))
 }
 
 /// A channel: banner, name, subscribers, then Videos and About tabs.
@@ -1455,8 +1451,7 @@ fn start(request: Request, message: &str) -> Option<Url> {
     let key = request.key();
     let path = page_path(&key)?;
     let already_running = IN_FLIGHT
-        .lock()
-        .unwrap()
+        .lock_ok()
         .as_ref()
         .is_some_and(|set| set.contains(&key));
     if !already_running {

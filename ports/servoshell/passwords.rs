@@ -14,6 +14,7 @@
 //! before they touch the disk. The file is `%APPDATA%\Pteron\passwords.json`. Passwords are
 //! never synced and never put in problem reports.
 
+use crate::locks::LockExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -193,59 +194,19 @@ fn store(vault: &Vault) {
 }
 
 fn with_vault<R>(f: impl FnOnce(&mut Vault) -> R) -> R {
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     let vault = state.vault.get_or_insert_with(load);
     f(vault)
 }
 
 fn save_vault_now() {
-    let state = STATE.lock().unwrap();
+    let state = STATE.lock_ok();
     if let Some(vault) = &state.vault {
         store(vault);
     }
 }
 
 // ---------------------------------------------------------------- Windows protection
-
-fn b64_encode(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in data.chunks(3) {
-        let n = (chunk[0] as u32) << 16
-            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
-            | *chunk.get(2).unwrap_or(&0) as u32;
-        out.push(T[(n >> 18) as usize & 63] as char);
-        out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
-
-fn b64_decode(text: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut buffer = 0u32;
-    let mut bits = 0;
-    for c in text.trim().bytes() {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => return None,
-        } as u32;
-        buffer = buffer << 6 | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buffer >> bits) as u8);
-            buffer &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
-}
 
 #[cfg(windows)]
 fn dpapi(protect: bool, input_b64: &str) -> Result<String, String> {
@@ -288,11 +249,11 @@ fn dpapi(_protect: bool, _input_b64: &str) -> Result<String, String> {
 }
 
 fn protect(plain: &str) -> Result<String, String> {
-    dpapi(true, &b64_encode(plain.as_bytes()))
+    dpapi(true, &crate::util::b64_encode(plain.as_bytes()))
 }
 
 fn unprotect(blob: &str) -> Result<String, String> {
-    let bytes = b64_decode(&dpapi(false, blob)?).ok_or("Unreadable password.")?;
+    let bytes = crate::util::b64_decode(&dpapi(false, blob)?).ok_or("Unreadable password.")?;
     String::from_utf8(bytes).map_err(|_| "Unreadable password.".to_string())
 }
 
@@ -325,7 +286,7 @@ fn on_login_sent(page: &Url, json: &str) {
     if sent.1.is_empty() || sent.1.chars().count() > MAX_FIELD || sent.0.chars().count() > MAX_FIELD {
         return;
     }
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     let vault = state.vault.get_or_insert_with(load);
     if !vault.enabled || vault.never.contains(&host) {
         return;
@@ -335,7 +296,7 @@ fn on_login_sent(page: &Url, json: &str) {
 
 fn on_form_seen(page: &Url) {
     let Some(host) = site_key(page) else { return };
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     let vault = state.vault.get_or_insert_with(load);
     if !vault.enabled || !vault.logins.iter().any(|l| l.host == host) {
         return;
@@ -347,7 +308,7 @@ fn on_form_seen(page: &Url) {
 
 /// What the "Save password?" bar should say: (site, user name, whether it replaces an old one).
 pub(crate) fn save_prompt() -> Option<(String, String, bool)> {
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     if state.pending.as_ref().is_some_and(|p| p.at.elapsed() > SAVE_WAIT) {
         state.pending = None;
     }
@@ -359,7 +320,7 @@ pub(crate) fn save_prompt() -> Option<(String, String, bool)> {
 }
 
 pub(crate) fn dismiss_save(never_for_site: bool) {
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     if let Some(pending) = state.pending.take() &&
         never_for_site
     {
@@ -374,12 +335,12 @@ pub(crate) fn dismiss_save(never_for_site: bool) {
 
 /// Encrypt and file the password the bar asked about. Runs in the background.
 pub(crate) fn accept_save() {
-    let Some(pending) = STATE.lock().unwrap().pending.take() else { return };
+    let Some(pending) = STATE.lock_ok().pending.take() else { return };
     std::thread::Builder::new()
         .name("pteron-passwords".into())
         .spawn(move || {
             let result = protect(&pending.password);
-            let mut state = STATE.lock().unwrap();
+            let mut state = STATE.lock_ok();
             match result {
                 Ok(blob) => {
                     let vault = state.vault.get_or_insert_with(load);
@@ -401,12 +362,12 @@ pub(crate) fn accept_save() {
 }
 
 fn say(text: String) {
-    STATE.lock().unwrap().message = Some((text, Instant::now()));
+    STATE.lock_ok().message = Some((text, Instant::now()));
 }
 
 /// A short result message ("Password saved...") for a few seconds.
 pub(crate) fn message() -> Option<String> {
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     match &state.message {
         Some((text, at)) if at.elapsed() < Duration::from_secs(4) => Some(text.clone()),
         Some(_) => {
@@ -419,7 +380,7 @@ pub(crate) fn message() -> Option<String> {
 
 /// The user names that can be filled on `page`, when the page just showed a password field.
 pub(crate) fn fill_offer(page: &Url) -> Option<(String, Vec<String>)> {
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     let offer = state.offer.as_ref()?;
     if offer.at.elapsed() > Duration::from_secs(600) || offer.page != page.as_str() {
         return None;
@@ -431,7 +392,7 @@ pub(crate) fn fill_offer(page: &Url) -> Option<(String, Vec<String>)> {
 }
 
 pub(crate) fn dismiss_offer() {
-    STATE.lock().unwrap().offer = None;
+    STATE.lock_ok().offer = None;
 }
 
 /// The script that puts a login into the page.
@@ -454,7 +415,7 @@ fn fill_script(user: &str, password: &str) -> String {
 /// Start opening login number `index` (of those for the offered site) in the background.
 pub(crate) fn request_fill(index: usize) {
     let (host, blob, user) = {
-        let mut state = STATE.lock().unwrap();
+        let mut state = STATE.lock_ok();
         let Some(host) = state.offer.take().map(|o| o.host) else { return };
         if state.busy {
             return;
@@ -468,7 +429,7 @@ pub(crate) fn request_fill(index: usize) {
         .name("pteron-passwords".into())
         .spawn(move || {
             let result = unprotect(&blob);
-            let mut state = STATE.lock().unwrap();
+            let mut state = STATE.lock_ok();
             state.busy = false;
             match result {
                 Ok(password) => state.ready = Some(Ready { host, script: fill_script(&user, &password) }),
@@ -480,14 +441,14 @@ pub(crate) fn request_fill(index: usize) {
 
 /// A fill script that is ready for the page at `page`, if any (and only for the same site).
 pub(crate) fn take_fill_script(page: &Url) -> Option<String> {
-    let mut state = STATE.lock().unwrap();
+    let mut state = STATE.lock_ok();
     let ready = state.ready.take()?;
     (site_key(page).as_deref() == Some(ready.host.as_str())).then_some(ready.script)
 }
 
 /// True while something is working in the background (so the window keeps repainting).
 pub(crate) fn working() -> bool {
-    let state = STATE.lock().unwrap();
+    let state = STATE.lock_ok();
     state.busy || state.ready.is_some()
 }
 
@@ -552,15 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn base64_round_trip() {
-        for text in ["", "a", "ab", "abc", "pässwörd ✓ 123!", "x".repeat(300).as_str()] {
-            assert_eq!(b64_decode(&b64_encode(text.as_bytes())).unwrap(), text.as_bytes());
-        }
-        assert_eq!(b64_encode(b"Man"), "TWFu");
-        assert!(b64_decode("a$b").is_none());
-    }
-
-    #[test]
     fn fill_script_is_quoted() {
         let script = fill_script("a\"b</script>", "p'w\\\n");
         assert!(script.contains("\"a\\\"b</script>\""));
@@ -592,7 +544,7 @@ mod tests {
         // tab's address, not from the message.
         let long = format!("__pteron_pw__{{\"u\":\"x\",\"p\":\"{}\"}}", "z".repeat(400));
         assert!(handle_console(Some(&url("https://a.com/")), &long));
-        assert!(!STATE.lock().unwrap().pending.as_ref().is_some_and(|p| p.password.len() > MAX_FIELD));
+        assert!(!STATE.lock_ok().pending.as_ref().is_some_and(|p| p.password.len() > MAX_FIELD));
     }
 
     #[test]

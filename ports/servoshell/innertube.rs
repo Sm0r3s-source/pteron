@@ -500,22 +500,7 @@ pub(crate) fn search_params(sort: u8, date: u8) -> String {
     bytes.push(0x12);
     bytes.push(inner.len() as u8);
     bytes.extend_from_slice(&inner);
-    base64_std(&bytes)
-}
-
-fn base64_std(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in data.chunks(3) {
-        let n = (chunk[0] as u32) << 16
-            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
-            | *chunk.get(2).unwrap_or(&0) as u32;
-        out.push(T[(n >> 18) as usize & 63] as char);
-        out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
-    }
-    out
+    crate::util::b64_encode(&bytes)
 }
 
 pub(crate) fn search(query: &str, params: &str) -> Result<(Vec<VideoItem>, Option<String>), String> {

@@ -11,7 +11,6 @@ use std::sync::{OnceLock, RwLock};
 use log::warn;
 
 pub(crate) const APP_NAME: &str = "Pteron";
-pub(crate) const APP_VERSION: &str = "0.1";
 
 /// Built-in search engines: (id, label, URL template where `%s` is the query).
 pub(crate) const ENGINES: &[(&str, &str, &str)] = &[

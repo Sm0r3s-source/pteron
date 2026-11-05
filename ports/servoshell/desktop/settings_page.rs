@@ -355,6 +355,13 @@ fn radio(
     changed
 }
 
+/// A group of radio buttons: `(value, label, description)` for each.
+fn radios(ui: &mut egui::Ui, current: &mut String, options: &[(&str, &str, Option<&str>)]) -> bool {
+    options.iter().fold(false, |changed, (value, label, description)| {
+        radio(ui, current, value, label, *description) | changed
+    })
+}
+
 fn search_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
     let mut changed = false;
     card(
@@ -431,24 +438,22 @@ fn multi_search_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool
                 .color(Color32::from_rgb(214, 160, 60)),
             );
             ui.add_space(6.0);
-            changed |= radio(
-                ui,
-                &mut settings.multi_mode,
-                "tabs",
-                "One tab per engine",
-                Some("Every engine opens in its own tab. Uses the most memory (one extra tab per engine)."),
-            );
-            changed |= radio(
-                ui,
-                &mut settings.multi_mode,
-                "page",
-                "One merged results page",
-                Some(
-                    "Pteron reads the results of each engine and shows them in one list. Uses less \
-                     memory than tabs, but works for DuckDuckGo, Bing, Brave and SearXNG only. If an \
-                     engine changes its pages or blocks the request, it is shown as a link instead.",
+            changed |= radios(ui, &mut settings.multi_mode, &[
+                (
+                    "tabs",
+                    "One tab per engine",
+                    Some("Every engine opens in its own tab. Uses the most memory (one extra tab per engine)."),
                 ),
-            );
+                (
+                    "page",
+                    "One merged results page",
+                    Some(
+                        "Pteron reads the results of each engine and shows them in one list. Uses less \
+                         memory than tabs, but works for DuckDuckGo, Bing, Brave and SearXNG only. If an \
+                         engine changes its pages or blocks the request, it is shown as a link instead.",
+                    ),
+                ),
+            ]);
             ui.add_space(6.0);
             ui.label("Engines to use (pick 2 to 4):");
             let mut options: Vec<(String, String)> = pteron::ENGINES
@@ -632,9 +637,11 @@ fn appearance_section(
         Some("What the page behind the search box looks like."),
         "background wallpaper picture image homepage new tab color gradient",
         |ui| {
-            changed |= radio(ui, &mut settings.newtab_bg, "theme", "Soft glow in the theme colour", None);
-            changed |= radio(ui, &mut settings.newtab_bg, "gradient", "Gradient in the theme colour", None);
-            changed |= radio(ui, &mut settings.newtab_bg, "color", "One colour", None);
+            changed |= radios(ui, &mut settings.newtab_bg, &[
+                ("theme", "Soft glow in the theme colour", None),
+                ("gradient", "Gradient in the theme colour", None),
+                ("color", "One colour", None),
+            ]);
             if settings.newtab_bg == "color" {
                 ui.horizontal(|ui| {
                     ui.add_space(26.0);
@@ -698,24 +705,18 @@ fn startup_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         Some("Pinned tabs always come back."),
         "startup start launch homepage restore session new tab",
         |ui| {
-            changed |= radio(ui, &mut settings.startup, "newtab", "Open a new tab", None);
-            changed |= radio(
-                ui,
-                &mut settings.startup,
-                "restore",
-                "Continue where I left off",
-                Some(
-                    "Tabs come back asleep to save memory: the tab you were on loads right away, \
-                     the others load when you click them.",
+            changed |= radios(ui, &mut settings.startup, &[
+                ("newtab", "Open a new tab", None),
+                (
+                    "restore",
+                    "Continue where I left off",
+                    Some(
+                        "Tabs come back asleep to save memory: the tab you were on loads right away, \
+                         the others load when you click them.",
+                    ),
                 ),
-            );
-            changed |= radio(
-                ui,
-                &mut settings.startup,
-                "custom",
-                "Open a page I choose",
-                None,
-            );
+                ("custom", "Open a page I choose", None),
+            ]);
             if settings.startup == "custom" {
                 ui.add_space(4.0);
                 changed |= ui
@@ -735,21 +736,11 @@ fn startup_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         Some("The row of site shortcuts under the search box."),
         "new tab tiles shortcuts bookmarks most visited sites frequent",
         |ui| {
-            changed |= radio(ui, &mut settings.newtab_tiles, "off", "Show nothing", None);
-            changed |= radio(
-                ui,
-                &mut settings.newtab_tiles,
-                "bookmarks",
-                "Only my bookmarks",
-                Some("Star a page in the sidebar to put it here."),
-            );
-            changed |= radio(
-                ui,
-                &mut settings.newtab_tiles,
-                "frequent",
-                "My bookmarks and the sites I visit most",
-                None,
-            );
+            changed |= radios(ui, &mut settings.newtab_tiles, &[
+                ("off", "Show nothing", None),
+                ("bookmarks", "Only my bookmarks", Some("Star a page in the sidebar to put it here.")),
+                ("frequent", "My bookmarks and the sites I visit most", None),
+            ]);
         },
     );
     changed
@@ -807,33 +798,25 @@ fn memory_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         ),
         "memory saver low ram reduce usage old slow computer",
         |ui| {
-            changed |= radio(
-                ui,
-                &mut settings.memory_mode,
-                "normal",
-                "Normal",
-                Some("Best speed. Nothing is held back."),
-            );
-            changed |= radio(
-                ui,
-                &mut settings.memory_mode,
-                "low",
-                "Low memory",
-                Some(
-                    "Smaller video buffer, background tabs sleep after 3 minutes, memory is handed \
-                     back to Windows when Pteron is in the background, fewer helper threads.",
+            changed |= radios(ui, &mut settings.memory_mode, &[
+                ("normal", "Normal", Some("Best speed. Nothing is held back.")),
+                (
+                    "low",
+                    "Low memory",
+                    Some(
+                        "Smaller video buffer, background tabs sleep after 3 minutes, memory is handed \
+                         back to Windows when Pteron is in the background, fewer helper threads.",
+                    ),
                 ),
-            );
-            changed |= radio(
-                ui,
-                &mut settings.memory_mode,
-                "lowest",
-                "Lowest memory",
-                Some(
-                    "Very small video buffer, tabs sleep after 1 minute, one page-layout thread, \
-                     small cache. Pages and videos start noticeably slower.",
+                (
+                    "lowest",
+                    "Lowest memory",
+                    Some(
+                        "Very small video buffer, tabs sleep after 1 minute, one page-layout thread, \
+                         small cache. Pages and videos start noticeably slower.",
+                    ),
                 ),
-            );
+            ]);
             if let Some(mb) = crate::memsaver::process_mb() {
                 ui.add_space(6.0);
                 ui.label(format!("Pteron is using about {mb} MB right now."));

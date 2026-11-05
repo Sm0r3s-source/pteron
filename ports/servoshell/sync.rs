@@ -20,10 +20,10 @@ const FILE_NAME: &str = "Pteron-sync.json";
 const SLACK: u64 = 1;
 
 /// The settings that travel between computers (not hardware, paths or first-run flags).
-const SYNCED: [&str; 17] = [
+const SYNCED: [&str; 15] = [
     "engine", "searxng_url", "theme", "custom_bg", "accent", "accent_custom", "newtab_bg", "newtab_color",
     "newtab_tiles", "tab_sleep_minutes", "sidebar_pinned", "startup", "homepage_url", "youtube_player",
-    "fast_start", "https_warning", "adblock",
+    "fast_start",
 ];
 
 #[derive(Debug, PartialEq)]
@@ -115,13 +115,26 @@ pub(crate) fn synced_settings(settings: &crate::pteron::Settings) -> serde_json:
         "homepage_url": settings.homepage_url,
         "youtube_player": settings.youtube_player,
         "fast_start": settings.fast_start,
-        "https_warning": settings.https_warning,
-        "adblock": settings.adblock,
     });
     let mut kept = serde_json::Map::new();
     for key in SYNCED {
         if let Some(value) = all.get(key) {
             kept.insert(key.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(kept)
+}
+
+/// Keeps only the settings that are meant to travel. A synced file can come from a shared
+/// folder, so it must never be able to change security switches (http warning, ad blocker)
+/// or anything else outside this list.
+pub(crate) fn only_synced(value: &serde_json::Value) -> serde_json::Value {
+    let mut kept = serde_json::Map::new();
+    if let Some(map) = value.as_object() {
+        for key in SYNCED {
+            if let Some(found) = map.get(key) {
+                kept.insert(key.to_string(), found.clone());
+            }
         }
     }
     serde_json::Value::Object(kept)
@@ -210,7 +223,7 @@ pub(crate) fn sync_now(allow_pull: bool) -> Result<String, String> {
         Step::Pull => {
             let remote = remote.as_ref().expect("a pull needs a remote copy");
             let mut updated = crate::pteron::settings();
-            crate::pteron::apply_json(&mut updated, &remote.settings);
+            crate::pteron::apply_json(&mut updated, &only_synced(&remote.settings));
             crate::pteron::update(updated);
             set_modified(&settings_file, remote.settings_modified);
             notes.push("settings updated (restart Pteron to see all of them)");
@@ -398,9 +411,15 @@ mod tests {
         assert_eq!(json.as_object().unwrap().len(), SYNCED.len());
         // and a received file cannot set a sync folder either
         let mut other = crate::pteron::Settings::default();
-        crate::pteron::apply_json(&mut other, &serde_json::json!({ "theme": "paper", "sync_folder": "X:\\evil", "adblock": false }));
+        let received = serde_json::json!({
+            "theme": "paper", "sync_folder": "X:\\evil", "adblock": false, "https_warning": false,
+            "clear_on_exit": true, "memory_mode": "lowest"
+        });
+        crate::pteron::apply_json(&mut other, &only_synced(&received));
         assert_eq!(other.theme, "paper");
-        assert!(!other.adblock);
+        assert!(other.adblock && other.https_warning);
+        assert!(!other.clear_on_exit);
+        assert_eq!(other.memory_mode, "normal");
         assert!(other.sync_folder.is_empty());
     }
 

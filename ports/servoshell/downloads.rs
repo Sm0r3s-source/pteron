@@ -16,6 +16,7 @@
 //! Not covered: files that a server forces to download through a `Content-Disposition`
 //! header on an ordinary page address, and downloads that need the page's login cookies.
 
+use crate::locks::LockExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -85,12 +86,12 @@ static NOTICE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 const NOTICE_SECS: u64 = 5;
 
 fn set_notice(text: String) {
-    *NOTICE.lock().unwrap() = Some((text, Instant::now()));
+    *NOTICE.lock_ok() = Some((text, Instant::now()));
 }
 
 /// A short message to show on screen for a few seconds, if any.
 pub(crate) fn notice() -> Option<String> {
-    let guard = NOTICE.lock().unwrap();
+    let guard = NOTICE.lock_ok();
     guard
         .as_ref()
         .filter(|(_, at)| at.elapsed() < Duration::from_secs(NOTICE_SECS))
@@ -186,7 +187,7 @@ static TEST_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 fn download_dir() -> PathBuf {
     #[cfg(test)]
-    if let Some(dir) = TEST_DIR.lock().unwrap().clone() {
+    if let Some(dir) = TEST_DIR.lock_ok().clone() {
         return dir;
     }
     dirs::download_dir()
@@ -214,7 +215,7 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 }
 
 fn update(id: u64, f: impl FnOnce(&mut Item)) {
-    if let Some(entry) = LIST.lock().unwrap().iter_mut().find(|e| e.item.id == id) {
+    if let Some(entry) = LIST.lock_ok().iter_mut().find(|e| e.item.id == id) {
         f(&mut entry.item);
     }
 }
@@ -264,7 +265,7 @@ fn begin_named(url: &str, name: String, convert: Option<crate::mp3::Tags>) {
         convert,
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    LIST.lock().unwrap().push(Entry {
+    LIST.lock_ok().push(Entry {
         item,
         cancel: cancel.clone(),
     });
@@ -289,7 +290,7 @@ pub(crate) fn note_blocked(url: &Url) {
 /// The user confirmed a program or script download.
 pub(crate) fn confirm(id: u64) {
     let cancel = {
-        let mut list = LIST.lock().unwrap();
+        let mut list = LIST.lock_ok();
         let Some(entry) = list.iter_mut().find(|e| e.item.id == id) else {
             return;
         };
@@ -304,7 +305,7 @@ pub(crate) fn confirm(id: u64) {
 
 /// Cancel a running or waiting download.
 pub(crate) fn cancel(id: u64) {
-    let mut list = LIST.lock().unwrap();
+    let mut list = LIST.lock_ok();
     if let Some(entry) = list.iter_mut().find(|e| e.item.id == id) {
         entry.cancel.store(true, Ordering::Relaxed);
         if entry.item.state == State::Confirm {
@@ -315,7 +316,7 @@ pub(crate) fn cancel(id: u64) {
 
 /// Remove an entry from the list (the downloaded file stays on disk).
 pub(crate) fn remove(id: u64) {
-    let mut list = LIST.lock().unwrap();
+    let mut list = LIST.lock_ok();
     if let Some(index) = list.iter().position(|e| e.item.id == id) {
         let running = matches!(list[index].item.state, State::Running | State::Converting(_));
         if running {
@@ -326,23 +327,14 @@ pub(crate) fn remove(id: u64) {
 }
 
 pub(crate) fn snapshot() -> Vec<Item> {
-    LIST.lock().unwrap().iter().map(|e| e.item.clone()).collect()
+    LIST.lock_ok().iter().map(|e| e.item.clone()).collect()
 }
 
 /// Whether a download is running (the window should keep repainting).
 pub(crate) fn any_active() -> bool {
-    LIST.lock()
-        .unwrap()
+    LIST.lock_ok()
         .iter()
         .any(|e| matches!(e.item.state, State::Running | State::Converting(_)))
-}
-
-/// Whether anything is waiting for a confirmation.
-pub(crate) fn any_waiting() -> bool {
-    LIST.lock()
-        .unwrap()
-        .iter()
-        .any(|e| e.item.state == State::Confirm)
 }
 
 /// Open the folder with the file selected. Safe for every file type.
@@ -487,7 +479,7 @@ fn head_length(url: &str) -> Option<u64> {
 
 fn spawn(id: u64, cancel: Arc<AtomicBool>) {
     let (url, part) = {
-        let list = LIST.lock().unwrap();
+        let list = LIST.lock_ok();
         let Some(entry) = list.iter().find(|e| e.item.id == id) else {
             return;
         };
@@ -567,7 +559,7 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
     // a lock kept inside an `if let` would still be held in its body, and the next `LIST.lock()`
     // there waited for itself forever (the whole window froze).
     let convert = if status.success() {
-        let list = LIST.lock().unwrap();
+        let list = LIST.lock_ok();
         list.iter()
             .find(|e| e.item.id == id)
             .and_then(|e| e.item.convert.clone().map(|tags| (tags, e.item.name.clone())))
@@ -613,8 +605,7 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
     }
     if status.success() {
         let name = LIST
-            .lock()
-            .unwrap()
+            .lock_ok()
             .iter()
             .find(|e| e.item.id == id)
             .map(|e| e.item.name.clone())
@@ -733,7 +724,7 @@ mod tests {
         }
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
-        *TEST_DIR.lock().unwrap() = Some(out.clone());
+        *TEST_DIR.lock_ok() = Some(out.clone());
         let bytes = std::fs::read(&src).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -781,7 +772,7 @@ mod tests {
         assert!(finished, "the song download did not finish");
         let file = std::fs::read(out.join("Test Song.mp3")).unwrap();
         assert!(file.starts_with(b"ID3"), "an MP3 with a tag");
-        *TEST_DIR.lock().unwrap() = None;
+        *TEST_DIR.lock_ok() = None;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
