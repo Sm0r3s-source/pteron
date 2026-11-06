@@ -928,8 +928,13 @@ impl Gui {
             let page_area = ctx.available_rect_before_wrap();
             if settings_page::show(ctx, settings_page, settings, page_area) {
                 apply_theme(ctx, settings);
-                let compat_changed = pteron::settings().compat != settings.compat;
+                let before = pteron::settings();
+                let compat_changed = before.compat != settings.compat;
+                let look_changed = pteron::newtab_look_changed(&before, settings);
                 pteron::update(settings.clone());
+                if look_changed && !compat_changed {
+                    window.queue_user_interface_command(UserInterfaceCommand::ReloadNewTabs);
+                }
                 if compat_changed {
                     state.apply_compat();
                     window.queue_user_interface_command(UserInterfaceCommand::ReloadAll);

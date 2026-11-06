@@ -87,6 +87,8 @@ pub(crate) struct Settings {
     pub privacy_signals: bool,
     /// Look for the https version of an http site before showing the warning.
     pub https_first: bool,
+    /// Use the full EasyList and EasyPrivacy filter lists in the ad blocker (uses more memory).
+    pub adblock_filters: bool,
 }
 
 impl Default for Settings {
@@ -122,6 +124,7 @@ impl Default for Settings {
             strip_tracking: true,
             privacy_signals: true,
             https_first: true,
+            adblock_filters: false,
         }
     }
 }
@@ -200,6 +203,7 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
         ("strip_tracking", &mut settings.strip_tracking),
         ("privacy_signals", &mut settings.privacy_signals),
         ("https_first", &mut settings.https_first),
+        ("adblock_filters", &mut settings.adblock_filters),
     ] {
         if let Some(enabled) = value.get(key).and_then(|v| v.as_bool()) {
             *field = enabled;
@@ -274,6 +278,7 @@ fn store() -> &'static RwLock<Settings> {
     STORE.get_or_init(|| {
         let loaded = load_from_disk();
         crate::adblock::set_enabled(loaded.adblock);
+        crate::filters::set_enabled(loaded.adblock && loaded.adblock_filters);
         crate::memsaver::set_level(crate::memsaver::Level::from_id(&loaded.memory_mode));
         RwLock::new(loaded)
     })
@@ -292,6 +297,7 @@ pub(crate) fn tab_sleep_minutes() -> u32 {
 /// Replace the settings and save them to disk.
 pub(crate) fn update(new_settings: Settings) {
     crate::adblock::set_enabled(new_settings.adblock);
+    crate::filters::set_enabled(new_settings.adblock && new_settings.adblock_filters);
     crate::memsaver::set_level(crate::memsaver::Level::from_id(&new_settings.memory_mode));
     crate::sync::changed_soon();
     if let Ok(mut current) = store().write() {
@@ -334,6 +340,7 @@ pub(crate) fn update(new_settings: Settings) {
         "strip_tracking": new_settings.strip_tracking,
         "privacy_signals": new_settings.privacy_signals,
         "https_first": new_settings.https_first,
+        "adblock_filters": new_settings.adblock_filters,
     });
     if let Err(error) = std::fs::write(&path, json.to_string()) {
         warn!("Could not save {}: {error}", path.display());
@@ -480,6 +487,17 @@ pub(crate) fn search_url_for(settings: &Settings) -> String {
     builtin(&settings.engine)
         .or_else(|| builtin(DEFAULT_ENGINE))
         .unwrap_or_default()
+}
+
+/// Did a setting change that the new tab page shows (so open new tabs should reload)?
+pub(crate) fn newtab_look_changed(old: &Settings, new: &Settings) -> bool {
+    let look = |s: &Settings| {
+        (
+            s.theme.clone(), s.custom_bg.clone(), s.accent.clone(), s.accent_custom.clone(), s.newtab_bg.clone(),
+            s.newtab_color.clone(), s.newtab_tiles.clone(), s.engine.clone(), s.searxng_url.clone(),
+        )
+    };
+    look(old) != look(new)
 }
 
 /// Where the settings file lives, for display in the About page.
@@ -764,11 +782,24 @@ mod memory_mode_tests {
     }
 
     #[test]
+    fn only_looks_reload_the_new_tab_page() {
+        let old = Settings::default();
+        let mut new = old.clone();
+        new.history_enabled = !new.history_enabled;
+        assert!(!newtab_look_changed(&old, &new));
+        new.theme = "forest".into();
+        assert!(newtab_look_changed(&old, &new));
+    }
+
+    #[test]
     fn privacy_settings_default_on_and_can_be_switched_off() {
         let mut settings = Settings::default();
         assert!(settings.strip_tracking && settings.privacy_signals && settings.https_first);
         apply_json(&mut settings, &serde_json::json!({ "strip_tracking": false, "https_first": false }));
         assert!(!settings.strip_tracking && !settings.https_first && settings.privacy_signals);
+        assert!(!settings.adblock_filters);
+        apply_json(&mut settings, &serde_json::json!({ "adblock_filters": true }));
+        assert!(settings.adblock_filters);
     }
 
     #[test]

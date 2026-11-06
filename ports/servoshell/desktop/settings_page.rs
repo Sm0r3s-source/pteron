@@ -1073,6 +1073,22 @@ fn privacy_section(
             *changed |= ui
                 .checkbox(&mut settings.adblock, "Block ads and trackers")
                 .changed();
+            ui.add_enabled_ui(settings.adblock, |ui| {
+                *changed |= ui
+                    .checkbox(&mut settings.adblock_filters, "Use the full EasyList and EasyPrivacy lists")
+                    .changed();
+            });
+            ui.label(
+                RichText::new(
+                    "Blocks far more ads and trackers, but uses roughly 15 to 30 MB more memory. \
+                     The lists are downloaded from easylist.to and refreshed weekly.",
+                )
+                .small()
+                .weak(),
+            );
+            if settings.adblock && settings.adblock_filters {
+                ui.label(RichText::new(crate::filters::status()).small().weak());
+            }
             let count = crate::adblock::blocked_count();
             if count > 0 {
                 ui.add_space(4.0);

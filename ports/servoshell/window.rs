@@ -707,6 +707,13 @@ impl ServoShellWindow {
                         }
                     }
                 },
+                UserInterfaceCommand::ReloadNewTabs => {
+                    for (_, webview) in self.webviews() {
+                        if webview.url().is_some_and(|url| url.as_str().starts_with("servo:newtab")) {
+                            webview.reload();
+                        }
+                    }
+                },
                 UserInterfaceCommand::NewWebView => {
                     self.set_needs_update();
                     let url = Url::parse("servo:newtab").expect("Should always be able to parse");

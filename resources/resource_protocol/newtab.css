@@ -1,0 +1,170 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+:root {
+  --bg: #1b1c1e;
+  --bg-glow: rgba(214, 170, 72, 0.16);
+  --text: #e9e6df;
+  --muted: #8d8b86;
+  --field: #26272a;
+  --field-border: #36373b;
+  --gold: #d6aa48;
+  --gold-soft: rgba(214, 170, 72, 0.35);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f2ee;
+    --bg-glow: rgba(190, 140, 40, 0.14);
+    --text: #2a2926;
+    --muted: #8a867e;
+    --field: #ffffff;
+    --field-border: #dedad2;
+    --gold: #b88a22;
+    --gold-soft: rgba(184, 138, 34, 0.35);
+  }
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg);
+  background-image: radial-gradient(ellipse at 50% 18%, var(--bg-glow), transparent 55%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin-top: -6vh;
+}
+
+.logo {
+  width: 84px;
+  height: 84px;
+  border-radius: 20px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28);
+  margin-bottom: 26px;
+}
+
+.clock {
+  font-size: 72px;
+  font-weight: 200;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.greeting {
+  margin-top: 12px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+form {
+  margin: 34px 0 0 0;
+  width: 620px;
+  max-width: 86vw;
+  display: flex;
+  align-items: center;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+form:focus-within {
+  border-color: var(--gold);
+  box-shadow: 0 6px 28px var(--gold-soft);
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 16px;
+  padding: 15px 8px 15px 24px;
+}
+
+input::placeholder {
+  color: var(--muted);
+}
+
+button {
+  background: transparent;
+  border: none;
+  color: var(--gold);
+  font-size: 20px;
+  padding: 8px 20px;
+  cursor: pointer;
+}
+
+.hint {
+  margin-top: 40px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.shortcuts {
+  margin-top: 34px;
+  width: 620px;
+  max-width: 86vw;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.tile {
+  width: 104px;
+  margin: 0 6px 14px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.tile .ico {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  color: var(--gold);
+  font-size: 22px;
+  font-weight: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+.tile:hover .ico {
+  border-color: var(--gold);
+}
+
+.tile .name {
+  margin-top: 8px;
+  max-width: 100px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -196,6 +196,19 @@ fn download_dir() -> PathBuf {
 }
 
 /// `dir/name`, or `dir/name (1).ext`, `dir/name (2).ext`, ... if it already exists.
+/// Mark the file as coming from the internet (the `Zone.Identifier` stream), so Windows
+/// SmartScreen checks programs before they run. Does nothing on other systems.
+fn mark_from_internet(path: &Path) {
+    #[cfg(windows)]
+    {
+        let mut stream = path.as_os_str().to_os_string();
+        stream.push(":Zone.Identifier");
+        let _ = std::fs::write(stream, "[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+    #[cfg(not(windows))]
+    let _ = path;
+}
+
 fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
@@ -580,6 +593,7 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
         match result {
             Ok(()) => match std::fs::rename(&temp, &final_path) {
                 Ok(()) => {
+                    mark_from_internet(&final_path);
                     let size = std::fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
                     update(id, |item| {
                         item.path = final_path;
@@ -613,6 +627,7 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
         let final_path = unique_path(&download_dir(), &name);
         match std::fs::rename(&part, &final_path) {
             Ok(()) => {
+                mark_from_internet(&final_path);
                 let size = std::fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
                 update(id, |item| {
                     item.path = final_path;

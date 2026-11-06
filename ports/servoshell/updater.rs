@@ -5,14 +5,14 @@
 //! no extra libraries are needed.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::streamproxy::UPSTREAM_USER_AGENT;
 
 /// This program's own number. Every release is tagged `build-<number>`; a bigger number than
 /// this one means an update is available. (Raised with every update.)
-pub(crate) const BUILD: u32 = 59;
+pub(crate) const BUILD: u32 = 60;
 
 /// Where releases are published: `https://github.com/<REPO>/releases`.
 pub(crate) const REPO: &str = "Sm0r3s-source/pteron";
@@ -25,6 +25,8 @@ pub(crate) struct Release {
     pub url: String,
     pub size: u64,
     pub sha256_url: Option<String>,
+    /// Signature (by the author's key) of the zip's SHA-256.
+    pub sig_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,13 +111,16 @@ pub(crate) fn parse_release(text: &str) -> Option<Release> {
     if !is_release_url(&url) || url.contains(['"', ' ', '\'', '`']) {
         return None;
     }
-    let sha256_url = assets
-        .iter()
-        .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(&format!("{zip_name}.sha256")))
-        .and_then(|a| a.get("browser_download_url"))
-        .and_then(|u| u.as_str())
-        .filter(|u| is_release_url(u))
-        .map(str::to_string);
+    let side_file = |suffix: &str| {
+        assets
+            .iter()
+            .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(&format!("{zip_name}{suffix}")))
+            .and_then(|a| a.get("browser_download_url"))
+            .and_then(|u| u.as_str())
+            .filter(|u| is_release_url(u))
+            .map(str::to_string)
+    };
+    let (sha256_url, sig_url) = (side_file(".sha256"), side_file(".sig"));
     let notes: String = value
         .get("body")
         .and_then(|b| b.as_str())
@@ -137,6 +142,7 @@ pub(crate) fn parse_release(text: &str) -> Option<Release> {
         url,
         size: zip.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
         sha256_url,
+        sig_url,
     })
 }
 
@@ -473,6 +479,16 @@ fn download(release: &Release) -> Result<PathBuf, String> {
         let _ = std::fs::remove_file(&zip);
         return Err("The download does not match its checksum, so it was not used.".into());
     }
+    // The checksum only proves the file arrived intact; the signature proves it is the author's.
+    let signed = match &release.sig_url {
+        Some(url) => crate::signing::verify_hash(&expected, &fetch_text(url)?),
+        None => false,
+    };
+    if !signed {
+        let _ = std::fs::remove_file(&zip);
+        return Err("This update is not signed by the Pteron author, so it was not installed.".into());
+    }
+    *crate::locks::LockExt::lock_ok(verified()) = Some(expected);
     Ok(zip)
 }
 
@@ -633,12 +649,24 @@ pub(crate) fn launch_installer() -> Result<(), String> {
     result
 }
 
+/// The checksum the downloaded zip matched.
+fn verified() -> &'static Mutex<Option<String>> {
+    static VERIFIED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    VERIFIED.get_or_init(Default::default)
+}
+
 fn launch_installer_inner() -> Result<(), String> {
     let Status::Ready(zip) = status() else {
         return Err("There is no downloaded update.".into());
     };
     if !zip.exists() {
         return Err("The downloaded file is gone. Download it again.".into());
+    }
+    // The file sat on disk since it was checked: check it again right before it is used.
+    let expected = crate::locks::LockExt::lock_ok(verified()).clone();
+    if expected.is_none_or(|expected| sha256_of(&zip).ok() != Some(expected)) {
+        let _ = std::fs::remove_file(&zip);
+        return Err("The downloaded file changed after it was checked, so it was not used. Download it again.".into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("Could not find the program folder.")?.to_path_buf();
@@ -728,6 +756,7 @@ mod tests {
         assert_eq!(release.size, 123456);
         assert_eq!(release.url, url);
         assert!(release.sha256_url.unwrap().ends_with(".zip.sha256"));
+        assert!(release.sig_url.is_none());
         assert!(release.notes.starts_with("Faster video start."));
     }
 

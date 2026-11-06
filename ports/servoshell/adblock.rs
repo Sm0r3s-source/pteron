@@ -105,6 +105,17 @@ pub(crate) fn should_block(url: &url::Url, is_main_frame: bool) -> bool {
     url.host_str().is_some_and(host_is_listed)
 }
 
+/// Like [`should_block`], and also asks the full filter lists when they are switched on.
+pub(crate) fn should_block_request(url: &url::Url, page: Option<&url::Url>, destination: &str, is_main_frame: bool) -> bool {
+    if should_block(url, is_main_frame) {
+        return true;
+    }
+    !is_main_frame &&
+        ENABLED.load(Ordering::Relaxed) &&
+        matches!(url.scheme(), "http" | "https") &&
+        crate::filters::blocks(url, page.unwrap_or(url).as_str(), destination)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

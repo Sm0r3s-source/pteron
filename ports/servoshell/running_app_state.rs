@@ -185,6 +185,8 @@ pub(crate) enum UserInterfaceCommand {
     Forward,
     Reload,
     ReloadAll,
+    /// Pteron: reload the tabs that show the new tab page (after a look or search setting changed).
+    ReloadNewTabs,
     NewWebView,
     /// Pteron: reopen the tab that was closed last.
     ReopenClosedTab,
@@ -1026,10 +1028,12 @@ impl WebViewDelegate for RunningAppState {
             .notify_crashed(webview, reason, backtrace);
     }
 
-    fn load_web_resource(&self, _webview: WebView, load: servo::WebResourceLoad) {
-        // Pteron: cancel requests to known ad and tracker networks.
+    fn load_web_resource(&self, webview: WebView, load: servo::WebResourceLoad) {
+        // Pteron: cancel requests to known ad and tracker networks (and, when switched on,
+        // whatever the full filter lists say).
         let (url, main_frame) = (load.request().url.clone(), load.request().is_for_main_frame);
-        if crate::adblock::should_block(&url, main_frame) {
+        let destination = format!("{:?}", load.request().destination);
+        if crate::adblock::should_block_request(&url, webview.url().as_ref(), &destination, main_frame) {
             crate::adblock::note_blocked();
             load.intercept(servo::WebResourceResponse::new(url)).cancel();
         }
