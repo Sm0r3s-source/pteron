@@ -118,6 +118,10 @@ pub(crate) struct State {
     /// Width of the part of the window (from the left edge) that belongs to the sidebar
     /// right now, including the hot zone when hidden. Used to route mouse events.
     pub hit_width: f32,
+    /// The mouse is over a compatibility tab's page (a native view that egui cannot see).
+    pub page_hover: bool,
+    /// The mouse is at the left edge of a compatibility tab's page.
+    pub page_edge: bool,
 }
 
 /// Whether `text` contains every word of `filter` (ignoring case). An empty filter matches all.
@@ -131,7 +135,13 @@ pub(crate) fn update_visibility(ctx: &Context, state: &mut State) {
     let pointer_x = ctx.pointer_latest_pos().map(|pos| pos.x);
     let location_focused = ctx.memory(|memory| memory.has_focus(Id::new(LOCATION_ID)));
     let reach = if state.visible { WIDTH + 6.0 } else { HOT_ZONE };
-    let near = pointer_x.is_some_and(|x| x <= reach);
+    let near = if state.page_edge {
+        true
+    } else if state.page_hover {
+        false
+    } else {
+        pointer_x.is_some_and(|x| x <= reach)
+    };
     let visible = state.pinned || state.focus_location || location_focused || near;
     if visible != state.visible {
         ctx.request_repaint();
@@ -346,7 +356,7 @@ pub(crate) fn show(
     if ui.ctx().global_style().visuals.text_cursor.blink {
         ui.ctx().global_style_mut(|style| {
             style.visuals.text_cursor.blink = false;
-            style.visuals.text_cursor.stroke = Stroke::new(2.0, accent_color());
+            style.visuals.text_cursor.stroke = Stroke::new(2.0_f32, accent_color());
         });
     }
     if state.pinned {
@@ -538,7 +548,7 @@ fn framed(
                         ui.add_space(8.0);
                         Frame::new()
                             .fill(tinted(ui.visuals().window_fill, accent, 0.12))
-                            .stroke(Stroke::new(1.0, accent.gamma_multiply(0.35)))
+                            .stroke(Stroke::new(1.0_f32, accent.gamma_multiply(0.35)))
                             .corner_radius(12.0)
                             .inner_margin(10.0)
                             .show(ui, |ui| {
@@ -836,7 +846,7 @@ fn drag_to_reorder(ui: &egui::Ui, key: &str, index: usize, rect: Rect, response:
     let y = if from > index { rect.min.y } else { rect.max.y };
     ui.painter().line_segment(
         [pos2(rect.min.x + 4.0, y), pos2(rect.max.x - 4.0, y)],
-        Stroke::new(2.0, accent_color()),
+        Stroke::new(2.0_f32, accent_color()),
     );
     ui.input(|input| input.pointer.any_released()).then_some((from, index))
 }

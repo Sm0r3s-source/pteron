@@ -494,7 +494,7 @@ fn theme_tile(ui: &mut egui::Ui, name: &str, palette: &crate::appearance::Palett
     } else {
         ui.visuals().text_color().gamma_multiply(0.18)
     };
-    painter.rect_stroke(rect, 10.0, egui::Stroke::new(if selected { 2.5 } else { 1.0 }, ring), egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 10.0, egui::Stroke::new(if selected { 2.5_f32 } else { 1.0 }, ring), egui::StrokeKind::Inside);
     let card = egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(rect.width() - 20.0, 24.0));
     painter.rect_filled(card, 6.0, c(palette.surface));
     painter.circle_filled(card.left_center() + egui::vec2(9.0, 0.0), 4.5, c(palette.accent));
@@ -520,10 +520,10 @@ fn swatch(ui: &mut egui::Ui, rgb: [u8; 3], selected: bool, name: &str) -> egui::
     ui.painter().circle_filled(rect.center(), 11.0, color);
     if selected {
         ui.painter()
-            .circle_stroke(rect.center(), 14.0, egui::Stroke::new(2.0, ui.visuals().text_color()));
+            .circle_stroke(rect.center(), 14.0, egui::Stroke::new(2.0_f32, ui.visuals().text_color()));
     } else if response.hovered() {
         ui.painter()
-            .circle_stroke(rect.center(), 13.0, egui::Stroke::new(1.5, color.gamma_multiply(0.6)));
+            .circle_stroke(rect.center(), 13.0, egui::Stroke::new(1.5_f32, color.gamma_multiply(0.6)));
     }
     response.on_hover_text(name)
 }
@@ -782,6 +782,103 @@ fn tabs_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         },
     );
     changed |= memory_card(ui, settings);
+    changed |= compat_tab_card(ui, settings);
+    changed
+}
+
+/// A list of site names with Remove buttons and a box to add one. Returns true when it changed.
+fn site_list(ui: &mut egui::Ui, id: &str, title: &str, sites: &mut Vec<String>) -> bool {
+    let mut changed = false;
+    ui.label(title);
+    let mut remove = None;
+    for (index, site) in sites.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(site);
+            if ui.small_button("Remove").clicked() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        sites.remove(index);
+        changed = true;
+    }
+    let input_id = egui::Id::new(id);
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(input_id)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        let reply = ui.add(egui::TextEdit::singleline(&mut text).hint_text("example.com").desired_width(180.0));
+        let entered = reply.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if (ui.button("Add").clicked() || entered) && !text.trim().is_empty() {
+            sites.push(std::mem::take(&mut text));
+            *sites = crate::compat_view::clean_sites(std::mem::take(sites));
+            changed = true;
+            if entered {
+                reply.request_focus();
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(input_id, text));
+    changed
+}
+
+fn compat_tab_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
+    let mut changed = false;
+    card(
+        ui,
+        "Compatibility tab",
+        Some(
+            "Some sites (Cloudflare's browser check, for example) cannot be passed by Pteron's \
+             engine. A compatibility tab shows such a page with your system's own web engine \
+             (WebView2 on Windows) inside a normal tab. It uses extra memory only while it is \
+             open, and it keeps its own cookies, so you sign in separately there. Pteron's ad \
+             blocker and passwords do not apply inside it.",
+        ),
+        "compatibility tab cloudflare webview2 browser check just a moment",
+        |ui| {
+            changed |= ui
+                .checkbox(&mut settings.compat_tab_handoff, "Hand over to the light engine after the check (experimental)")
+                .changed();
+            ui.label(
+                RichText::new(
+                    "When a site's browser check passes, Pteron copies the pass (a cookie) to its own engine and \
+                     closes the heavy one, so it only runs for a few seconds. If the site does not accept it, \
+                     the page goes back to a compatibility tab. While this is on, Pteron presents itself with \
+                     the system engine's browser name, and the other compatibility options below are switched off.",
+                )
+                .small()
+                .weak(),
+            );
+            ui.add_space(6.0);
+            changed |= site_list(
+                ui,
+                "compat_keep_input",
+                "Sites that never use Pteron's own engine (it draws them badly). They always open in a compatibility tab, in every mode:",
+                &mut settings.compat_tab_keep_sites,
+            );
+            ui.add_space(6.0);
+            ui.add_enabled_ui(!settings.compat_tab_handoff, |ui| {
+                changed |= radios(ui, &mut settings.compat_tab_mode, &[
+                    ("auto", "Switch automatically", Some("A browser-check page moves to a compatibility tab by itself.")),
+                    ("ask", "Ask me", Some("Pteron asks first.")),
+                    ("off", "Off", Some("Only the notice with Open in default browser.")),
+                ]);
+                ui.add_space(6.0);
+                changed |= site_list(ui, "compat_site_input", "Sites that always open in a compatibility tab:", &mut settings.compat_tab_sites);
+            });
+            ui.add_space(6.0);
+            changed |= ui
+                .checkbox(&mut settings.compat_tab_no_gpu, "Use less memory (experimental)")
+                .changed();
+            ui.label(
+                RichText::new(
+                    "Turns off the engine's graphics helper. Saves memory (often around 50 MB), but scrolling \
+                     and video can be slower. Applies the next time Pteron starts.",
+                )
+                .small()
+                .weak(),
+            );
+        },
+    );
     changed
 }
 

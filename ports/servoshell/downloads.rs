@@ -446,23 +446,10 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn curl_command() -> Command {
-    #[cfg(windows)]
-    let mut command = {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new("curl.exe");
-        // CREATE_NO_WINDOW
-        command.creation_flags(0x0800_0000);
-        command
-    };
-    #[cfg(not(windows))]
-    let command = Command::new("curl");
-    command
-}
 
 /// The size from the `Content-Length` header of the last response, if the server tells it.
 fn head_length(url: &str) -> Option<u64> {
-    let output = curl_command()
+    let output = crate::streamproxy::curl_command()
         .args([
             "-sIL",
             "--max-time",
@@ -508,7 +495,7 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
     if let Some(total) = head_length(&url) {
         update(id, |item| item.total = Some(total));
     }
-    let mut child = match curl_command()
+    let mut child = match crate::streamproxy::curl_command()
         .args([
             "-L",
             "--fail",

@@ -222,8 +222,15 @@ pub(crate) fn start_logger() {
             let Some(mb) = process_mb() else { return };
             let since = last.map(|(_, at)| at.elapsed().as_secs()).unwrap_or(0);
             if should_log(last.map(|(m, _)| m), mb, since) {
+                let compat = match crate::compat_host::alive_count() {
+                    0 => String::new(),
+                    n => match crate::compat_host::engine_mb() {
+                        Some(engine) => format!(", {n} compatibility tabs (system engine about {engine} MB in all, other programs included)"),
+                        None => format!(", {n} compatibility tabs"),
+                    },
+                };
                 crate::crashlog::note(&format!(
-                    "memory: {mb} MB in use, {} tabs, memory saver {}",
+                    "memory: {mb} MB in use, {} tabs, memory saver {}{compat}",
                     TABS.load(Ordering::Relaxed),
                     level().id()
                 ));

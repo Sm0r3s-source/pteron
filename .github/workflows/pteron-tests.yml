@@ -1,0 +1,20 @@
+name: pteron-tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pteron_ci
+      # The public update key is made on the author's PC and is not in the repository.
+      - name: Placeholder update key
+        run: test -f ports/servoshell/update_key.pub || echo "AAAA" > ports/servoshell/update_key.pub
+      - name: Unit tests
+        run: cargo test --manifest-path pteron_ci/Cargo.toml

@@ -235,13 +235,13 @@ impl App {
 
     /// Pteron: block until the next event, but wake up every few seconds when tab
     /// sleeping is enabled so idle tabs get checked.
+    /// Also wakes up for the next frame the user interface asked for.
     fn set_idle_control_flow(event_loop: &ActiveEventLoop) {
-        if crate::window::tab_sleep_timeout().is_some() {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_secs(10),
-            ));
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+        let sleep_check = crate::window::tab_sleep_timeout().map(|_| Instant::now() + Duration::from_secs(10));
+        let frame = crate::window::next_repaint();
+        match sleep_check.into_iter().chain(frame).min() {
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
@@ -321,6 +321,16 @@ impl ApplicationHandler<AppEvent> for App {
             event_loop.exit();
         }
 
+        Self::set_idle_control_flow(event_loop);
+    }
+
+    /// Pteron: something outside winit's own events (a compatibility tab's page) asked for a frame.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if crate::window::next_repaint().is_some_and(|at| at <= Instant::now()) &&
+            !self.pump_servo_event_loop(event_loop.into())
+        {
+            event_loop.exit();
+        }
         Self::set_idle_control_flow(event_loop);
     }
 

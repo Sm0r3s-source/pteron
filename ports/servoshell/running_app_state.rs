@@ -791,7 +791,11 @@ impl WebViewDelegate for RunningAppState {
         self.window_for_webview(&webview).set_needs_update();
     }
 
-    fn notify_history_changed(&self, webview: WebView, _entries: Vec<Url>, _current: usize) {
+    fn notify_history_changed(&self, webview: WebView, entries: Vec<Url>, current: usize) {
+        // Pteron: Back must not land on a compatibility tab that already handed its site over.
+        if let Some(steps) = crate::compat_view::history_skip(&format!("{:?}", webview.id()), &entries, current) {
+            let _ = if steps < 0 { webview.go_back(steps.unsigned_abs()) } else { webview.go_forward(steps.unsigned_abs()) };
+        }
         self.window_for_webview(&webview).set_needs_update();
     }
 
@@ -839,6 +843,12 @@ impl WebViewDelegate for RunningAppState {
             if let Some(page) = crate::youtube::handle(action) {
                 webview.load(page);
             }
+            return;
+        }
+        // Pteron: sites that need the compatibility tab open there from the start.
+        if let Some(page) = crate::compat_view::redirect(&crate::pteron::settings(), &navigation_request.url) {
+            navigation_request.deny();
+            webview.load(page);
             return;
         }
         // Pteron: links lose their tracking parts (utm_*, fbclid, ...); the cleaned address

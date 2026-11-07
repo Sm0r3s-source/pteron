@@ -36,6 +36,36 @@ pub(crate) const MIN_WINDOW_INNER_SIZE: DeviceIntSize = DeviceIntSize::new(100, 
 
 static SERVOSHELL_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Pteron: when the next frame is wanted. egui asks for timed frames (a notice, a progress bar,
+/// polling a compatibility tab); before, any such request drew the next frame at once, so the
+/// window redrew without a pause while one was pending.
+static REPAINT_AT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+pub(crate) fn repaint_after(delay: Duration) {
+    use crate::locks::LockExt;
+    let Some(at) = Instant::now().checked_add(delay) else { return };
+    let mut next = REPAINT_AT.lock_ok();
+    if next.is_none_or(|next| at < next) {
+        *next = Some(at);
+    }
+}
+
+/// True (once) when the wanted frame is due.
+pub(crate) fn take_due_repaint() -> bool {
+    use crate::locks::LockExt;
+    let mut next = REPAINT_AT.lock_ok();
+    let due = next.is_some_and(|at| at <= Instant::now() + Duration::from_millis(2));
+    if due {
+        *next = None;
+    }
+    due
+}
+
+pub(crate) fn next_repaint() -> Option<Instant> {
+    use crate::locks::LockExt;
+    *REPAINT_AT.lock_ok()
+}
+
 /// Pteron: how long a background tab may sit unused before it is put to sleep.
 /// Set `PTERON_TAB_SLEEP_SECS` to change it; `0` turns tab sleeping off. Default: 300 s.
 #[cfg_attr(any(target_os = "android", target_env = "ohos"), expect(dead_code))]
@@ -187,6 +217,8 @@ impl ServoShellWindow {
     ) -> WebView {
         let mut webview_builder = match creation_type {
             TopLevelWebViewCreationRequest::WithUrl(url) => {
+                // Pteron: sites on the compatibility list open there from the first load.
+                let url = crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url);
                 WebViewBuilder::new(state.servo(), self.platform_window.rendering_context())
                     .url(url)
             },
@@ -345,7 +377,7 @@ impl ServoShellWindow {
 
         // Delegate handlers may have asked us to present or update painted WebView contents.
         // Currently, egui-file-dialog dialogs need to be constantly redrawn or animations aren't fluid.
-        let needs_repaint = self.needs_repaint.take();
+        let needs_repaint = self.needs_repaint.take() || take_due_repaint();
         if updated_user_interface || needs_repaint {
             self.platform_window.request_repaint(self);
         }
@@ -680,7 +712,9 @@ impl ServoShellWindow {
                         break;
                     };
                     if let Some(active_webview) = self.active_webview() {
-                        active_webview.load(url.into_url());
+                        // (Typed addresses do not pass the navigation check, so the lists apply here too.)
+                        let url = url.into_url();
+                        active_webview.load(crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url));
                     }
                 },
                 UserInterfaceCommand::Back => {

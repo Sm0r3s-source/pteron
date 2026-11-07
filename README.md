@@ -49,11 +49,16 @@ wrong or do not work (see [Known problems](#known-problems)).
 - After a crash, Pteron starts in safe mode with those features off
 - **Check this page** (tab context menu) writes a small report about what a page is missing
 
+**Compatibility tab**
+- Pages that Servo cannot handle (Cloudflare's browser check and similar) open in your system's own web engine (WebView2 on Windows) inside a normal tab, by themselves, after asking, or never (Settings, Tabs)
+- Sites you choose, or that switched by themselves, open there from the start; the list is in Settings
+- Experimental: after a site's browser check passes, Pteron can copy the pass cookie to its own engine and close the system engine, so the heavy engine only runs for a few seconds (off by default; if the site does not accept it, the page goes back to a compatibility tab)
+- The engine is started only for such a tab, uses less memory when the tab is hidden, and is closed after a while; it keeps its own sign-ins and does not use the ad blocker or saved passwords
+
 **Other**
 - Sync of bookmarks and settings through a folder you choose
 - Self-update from Settings, About
-- Crash log, problem report file, and a notice with **Open in default browser** for sites that sit
-  behind Cloudflare's check (Pteron cannot pass it)
+- Crash log and problem report file
 
 ## Installing and updating
 
@@ -79,7 +84,8 @@ powershell -ExecutionPolicy Bypass -File .\pteron_updateNN.ps1 -Publish
 ```
 
 `-NoBuild` copies the files without building; `-Publish` builds, packages and publishes a release.
-A fully reproducible build (a real Servo fork with a lockfile, built in CI) is planned.
+The unit tests of Pteron's own modules run on every push (`.github/workflows/pteron-tests.yml`, `pteron_ci/`); a fully
+reproducible Servo build in CI is planned.
 
 ## Where things are
 
@@ -93,6 +99,7 @@ New files are in `ports/servoshell/`. Some of the main ones:
 | `adblock.rs`, `privacy.rs`, `secure.rs`, `passwords.rs` | Blocking, tracking removal, https, passwords |
 | `sync.rs`, `updater.rs`, `library.rs` | Sync, self-update, bookmarks and history |
 | `compat.rs`, `sitecheck.rs`, `crashlog.rs`, `report.rs` | Compatibility, page check, crash and problem reports |
+| `compat_view.rs`, `compat_host.rs` | Compatibility tab: when to switch, and the embedded system web engine |
 | `memsaver.rs`, `multisearch.rs`, `util.rs`, `locks.rs` | Memory saver, multi-engine search, shared helpers |
 
 Pteron also makes small changes in Servo's own files (`components/config/prefs.rs`,
@@ -102,7 +109,7 @@ media controls).
 ## Known problems
 
 - Protected (DRM) media does not work: Spotify, Netflix, Disney+ and similar
-- Strict anti-bot checks, including Cloudflare's "Just a moment" page, cannot be passed
+- Strict anti-bot checks, including Cloudflare's "Just a moment" page, cannot be passed by Pteron's own engine; Pteron opens those pages in a compatibility tab instead (see above)
 - Some modern pages look wrong, stay blank or load slowly; the engine does not support every web feature
 - Windows only for now; no extensions and no private window
 - Videos play H.264 up to 1080p60; VP9, AV1 and 4K are not supported

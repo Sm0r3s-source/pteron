@@ -710,15 +710,13 @@ fn curl_program() -> &'static str {
 }
 
 pub(crate) fn curl_command() -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(curl_program());
     #[cfg(windows)]
-    let mut command = {
+    {
         use std::os::windows::process::CommandExt;
-        let mut command = Command::new(curl_program());
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        command
-    };
-    #[cfg(not(windows))]
-    let command = Command::new(curl_program());
+    }
     command
 }
 

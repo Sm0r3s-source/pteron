@@ -35,6 +35,8 @@ mod reader;
 mod report;
 mod passwords;
 mod compat;
+mod compat_host;
+mod compat_view;
 mod locks;
 mod signing;
 mod util;

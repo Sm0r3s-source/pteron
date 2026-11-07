@@ -89,6 +89,16 @@ pub(crate) struct Settings {
     pub https_first: bool,
     /// Use the full EasyList and EasyPrivacy filter lists in the ad blocker (uses more memory).
     pub adblock_filters: bool,
+    /// What happens at a browser-check page Servo cannot pass: "auto", "ask" or "off".
+    pub compat_tab_mode: String,
+    /// Sites that always open in the compatibility tab.
+    pub compat_tab_sites: Vec<String>,
+    /// Run the compatibility tab without the engine's GPU process (less memory, slower scrolling).
+    pub compat_tab_no_gpu: bool,
+    /// After a browser check passes in the compatibility tab, carry on in Servo with the pass cookie.
+    pub compat_tab_handoff: bool,
+    /// Sites that are never handed over to Servo (it draws them badly): they stay in the compatibility tab.
+    pub compat_tab_keep_sites: Vec<String>,
 }
 
 impl Default for Settings {
@@ -125,6 +135,12 @@ impl Default for Settings {
             privacy_signals: true,
             https_first: true,
             adblock_filters: false,
+            compat_tab_mode: "auto".to_string(),
+            compat_tab_sites: Vec::new(),
+            compat_tab_no_gpu: false,
+            compat_tab_handoff: false,
+            // Claude's message box is an editor that Servo cannot type into.
+            compat_tab_keep_sites: vec!["claude.ai".to_string()],
         }
     }
 }
@@ -204,6 +220,8 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
         ("privacy_signals", &mut settings.privacy_signals),
         ("https_first", &mut settings.https_first),
         ("adblock_filters", &mut settings.adblock_filters),
+        ("compat_tab_no_gpu", &mut settings.compat_tab_no_gpu),
+        ("compat_tab_handoff", &mut settings.compat_tab_handoff),
     ] {
         if let Some(enabled) = value.get(key).and_then(|v| v.as_bool()) {
             *field = enabled;
@@ -214,6 +232,21 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
     }
     if let Some(mode) = value.get("multi_mode").and_then(|v| v.as_str()) {
         settings.multi_mode = if mode == "page" { "page" } else { "tabs" }.to_string();
+    }
+    if let Some(mode) = value.get("compat_tab_mode").and_then(|v| v.as_str()) &&
+        matches!(mode, "auto" | "ask" | "off")
+    {
+        settings.compat_tab_mode = mode.to_string();
+    }
+    if let Some(list) = value.get("compat_tab_keep_sites").and_then(|v| v.as_array()) {
+        settings.compat_tab_keep_sites = crate::compat_view::clean_sites(
+            list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        );
+    }
+    if let Some(list) = value.get("compat_tab_sites").and_then(|v| v.as_array()) {
+        settings.compat_tab_sites = crate::compat_view::clean_sites(
+            list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        );
     }
     if let Some(list) = value.get("multi_engines").and_then(|v| v.as_array()) {
         settings.multi_engines = crate::multisearch::clean_engines(
@@ -341,6 +374,11 @@ pub(crate) fn update(new_settings: Settings) {
         "privacy_signals": new_settings.privacy_signals,
         "https_first": new_settings.https_first,
         "adblock_filters": new_settings.adblock_filters,
+        "compat_tab_mode": new_settings.compat_tab_mode,
+        "compat_tab_no_gpu": new_settings.compat_tab_no_gpu,
+        "compat_tab_handoff": new_settings.compat_tab_handoff,
+        "compat_tab_keep_sites": new_settings.compat_tab_keep_sites,
+        "compat_tab_sites": new_settings.compat_tab_sites,
     });
     if let Err(error) = std::fs::write(&path, json.to_string()) {
         warn!("Could not save {}: {error}", path.display());
@@ -708,7 +746,7 @@ pub(crate) fn known_issues_html() -> String {
 <div class=card><h2>Websites</h2><ul>\
 <li>Sites that play protected (DRM) media do not work: Spotify, Netflix, Disney+ and similar.</li>\
 <li>Sites with strict anti-bot checks (such as a login behind a reCAPTCHA) may not let you in.</li>\
-<li>Sites behind Cloudflare&#39;s &quot;Just a moment&quot; or &quot;Performing security verification&quot; check (for example claude.ai or isdown.app) cannot be passed in Pteron. Use <b>Open in default browser</b> on that page.</li>\
+<li>Sites behind Cloudflare&#39;s &quot;Just a moment&quot; or &quot;Performing security verification&quot; check (for example claude.ai or isdown.app) cannot be passed by Pteron&#39;s own engine. Pteron opens them in a <b>compatibility tab</b> (your system&#39;s web engine) instead; you can change this in Settings, Tabs. That tab keeps its own sign-ins and does not use the ad blocker or saved passwords.</li>\
 <li>Some modern web pages look wrong, stay blank, or load slowly, because the engine does not support every web feature yet.</li>\
 <li>The text cursor may not show in some text boxes (being looked at).</li></ul></div>\
 <div class=card><h2>Reading mode, sync and security</h2><ul>\
@@ -798,6 +836,19 @@ mod memory_mode_tests {
         apply_json(&mut settings, &serde_json::json!({ "strip_tracking": false, "https_first": false }));
         assert!(!settings.strip_tracking && !settings.https_first && settings.privacy_signals);
         assert!(!settings.adblock_filters);
+        assert_eq!(settings.compat_tab_mode, "auto");
+        assert!(!settings.compat_tab_no_gpu && !settings.compat_tab_handoff);
+        apply_json(&mut settings, &serde_json::json!({ "compat_tab_handoff": true }));
+        assert!(settings.compat_tab_handoff);
+        apply_json(&mut settings, &serde_json::json!({ "compat_tab_keep_sites": ["Claude.ai", "claude.ai", "x y"] }));
+        assert_eq!(settings.compat_tab_keep_sites, vec!["claude.ai".to_string()]);
+        apply_json(&mut settings, &serde_json::json!({ "compat_tab_no_gpu": true }));
+        assert!(settings.compat_tab_no_gpu);
+        apply_json(&mut settings, &serde_json::json!({ "compat_tab_mode": "bogus", "compat_tab_sites": ["A.com", "a.com", "b c"] }));
+        assert_eq!(settings.compat_tab_mode, "auto");
+        assert_eq!(settings.compat_tab_sites, vec!["a.com".to_string()]);
+        apply_json(&mut settings, &serde_json::json!({ "compat_tab_mode": "ask" }));
+        assert_eq!(settings.compat_tab_mode, "ask");
         apply_json(&mut settings, &serde_json::json!({ "adblock_filters": true }));
         assert!(settings.adblock_filters);
     }

@@ -76,6 +76,8 @@ pub struct Gui {
     settings_page: settings_page::PageState,
     /// The tab that was active last frame; switching tabs closes the settings page.
     last_active_tab: Option<WebViewId>,
+    /// Pteron: the system web engine views behind compatibility tabs.
+    compat_host: crate::compat_host::Host,
 
     location: String,
 
@@ -245,6 +247,10 @@ impl Gui {
 
         let font_definitions = configure_fonts();
         context.egui_ctx.set_fonts(font_definitions);
+        // Pteron: timed frames wait for their time (see `window::repaint_after`).
+        context
+            .egui_ctx
+            .set_request_repaint_callback(|info| crate::window::repaint_after(info.delay));
 
         context
             .egui_winit
@@ -271,6 +277,7 @@ impl Gui {
             settings: pteron::settings(),
             settings_page: Default::default(),
             last_active_tab: None,
+            compat_host: Default::default(),
             location: initial_url.to_string(),
             location_dirty: false,
             load_status: LoadStatus::Complete,
@@ -455,6 +462,7 @@ impl Gui {
             settings,
             settings_page,
             last_active_tab,
+            compat_host,
             ..
         } = self;
 
@@ -462,12 +470,34 @@ impl Gui {
         context.run(winit_window, |ctx| {
             load_pending_favicons(ctx, window, favicon_textures);
 
+            // Pteron: sites that switched to the compatibility tab by themselves are remembered.
+            let keep = crate::compat_view::take_keep();
+            if !keep.is_empty() {
+                settings.compat_tab_keep_sites.extend(keep);
+                settings.compat_tab_keep_sites = crate::compat_view::clean_sites(std::mem::take(&mut settings.compat_tab_keep_sites));
+                pteron::update(settings.clone());
+            }
+            let remembered = crate::compat_view::take_remembered();
+            if !remembered.is_empty() {
+                settings.compat_tab_sites.extend(remembered);
+                settings.compat_tab_sites = crate::compat_view::clean_sites(std::mem::take(&mut settings.compat_tab_sites));
+                pteron::update(settings.clone());
+            }
+
             // TODO: While in fullscreen add some way to mitigate the increased phishing risk
             // when not displaying the URL bar: https://github.com/servo/servo/issues/32443
             // Show toolbar unless fullscreen is from document (web API)
             if *sidebar_mode && !headed_window.is_fullscreen_from_document() {
                 // Pteron: the sidebar floats over the page, so the page keeps the full window.
                 *toolbar_height = Length::default();
+                // A compatibility tab is a native view that egui cannot see the mouse over; the page
+                // reports it, so the sidebar can still open at the left edge and close again.
+                let on_compat = window
+                    .active_webview()
+                    .and_then(|webview| webview.url())
+                    .is_some_and(|url| crate::compat_view::target(&url).is_some());
+                sidebar.page_hover = on_compat && crate::compat_host::pointer_in_page();
+                sidebar.page_edge = on_compat && crate::compat_host::pointer_at_edge();
                 sidebar.pinned = settings.sidebar_pinned;
                 sidebar::set_left_inset(if sidebar.pinned { sidebar::WIDTH } else { 0.0 });
                 sidebar::update_visibility(ctx, sidebar);
@@ -932,6 +962,9 @@ impl Gui {
                 let compat_changed = before.compat != settings.compat;
                 let look_changed = pteron::newtab_look_changed(&before, settings);
                 pteron::update(settings.clone());
+                if before.compat_tab_handoff && !settings.compat_tab_handoff {
+                    crate::compat_host::restore_agent(state.servo());
+                }
                 if look_changed && !compat_changed {
                     window.queue_user_interface_command(UserInterfaceCommand::ReloadNewTabs);
                 }
@@ -1104,6 +1137,54 @@ impl Gui {
                 webview.resize(PhysicalSize::new(size.width as u32, size.height as u32))
             }
 
+            // Pteron: the compatibility tab's view covers the page area while it is the active tab
+            // and nothing from egui (a menu, the Settings page, the address bar list) needs to be on top.
+            {
+                let active = window.active_webview();
+                let active_url = active.as_ref().and_then(|webview| webview.url());
+                let free = !settings_page.open &&
+                    !ctx.memory(|memory| memory.any_popup_open()) &&
+                    !sidebar::location_focused(ctx);
+                let live: Vec<WebViewId> = window.webview_ids();
+                let current = active.as_ref().zip(active_url.as_ref()).map(|(webview, url)| (webview.id(), url));
+                // The view fills the window while the sidebar is hidden, so nothing shows next to the
+                // page. The page reports the mouse at its left edge, which opens the sidebar, and
+                // over the page, which closes it. egui draws a frame only when something happens,
+                // and the mouse over a native view is not something it sees, so while the sidebar
+                // is not pinned the window is redrawn a few times a second to read those reports.
+                // (The page also wakes Pteron itself when it reports something; this is the fallback,
+                // and with the sidebar pinned it only picks up a finished browser check.)
+                let on_compat_page = active_url.as_ref().is_some_and(|url| crate::compat_view::target(url).is_some());
+                if on_compat_page {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(if sidebar.pinned { 500 } else { 100 }));
+                }
+                let left = if sidebar.pinned {
+                    available_rect.min.x
+                } else if sidebar.visible {
+                    sidebar::WIDTH
+                } else {
+                    0.0
+                };
+                let area = egui::Rect::from_min_max(pos2(available_rect.min.x.max(left), available_rect.min.y), available_rect.max);
+                compat_host.sync(winit_window, &live, current, free.then_some(area), ctx.pixels_per_point(), ctx.wants_keyboard_input());
+                crate::compat_host::note_alive(compat_host.alive());
+                // The system engine passed a browser check: Servo carries on with the pass.
+                if let Some(handoff) = compat_host.take_handoff() {
+                    crate::compat_host::apply_handoff(state.servo(), &handoff);
+                    if let Some(host) = handoff.page.host_str() {
+                        crate::compat_view::mark_handed_off(host);
+                        crate::compat_view::note_handoff(host);
+                    }
+                    compat_host.release(handoff.id);
+                    if let Some(webview) = window.webview_by_id(handoff.id) {
+                        webview.load(handoff.page);
+                    }
+                }
+                if compat_host.trimming() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                }
+            }
+
             if let Some(status_text) = &self.status_text {
                 egui::Tooltip::always_open(
                     ctx.clone(),
@@ -1184,7 +1265,8 @@ impl Gui {
 
         // If any egui widget requested a repaint, also request a repaint for our
         // containing window. This allows egui widget to animate on their own.
-        if self.context.egui_ctx.has_requested_repaint() {
+        // Pteron: only when it is due; a later one is woken up for by the event loop.
+        if crate::window::take_due_repaint() {
             window.set_needs_repaint();
         }
 
@@ -1270,18 +1352,79 @@ impl Gui {
             matches!(page.scheme(), "http" | "https") &&
             webview
                 .page_title()
-                .is_some_and(|title| title.starts_with("Just a moment") || title.starts_with("Attention Required"))
+                .is_some_and(|title| crate::compat_view::is_challenge_title(&title))
         {
-            // A "checking your browser" page that Pteron usually cannot get past.
-            let mut open = false;
-            place("pteron_challenge_hint").show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label("This site is checking your browser and Pteron may not get through.");
-                    open = ui.button("Open in default browser").clicked();
+            // A "checking your browser" page that Servo cannot pass: Pteron opens it in the
+            // compatibility tab (by itself, or after asking, as the settings say).
+            // With the hand-over on, the page only goes to a compatibility tab to pass the check.
+            let now = crate::pteron::settings();
+            let mode = crate::compat_view::effective_mode(&now).to_string();
+            let can = crate::compat_view::usable() && mode != "off";
+            let (mut compat, mut open) = (false, false);
+            // The check came back on a handed-over site. Right after the hand-over, Servo was not
+            // accepted: the site stays in the compatibility tab. Later, the pass ran out: get a new one.
+            let returned = page.host_str().and_then(crate::compat_view::check_returned);
+            if returned == Some(true) &&
+                let Some(host) = page.host_str()
+            {
+                crate::compat_view::mark_stay(host);
+                crate::compat_view::keep_later(host);
+            }
+            if returned.is_some() {
+                compat = can;
+            } else if can && mode == "auto" && crate::compat_view::first_switch(&format!("{:?}", webview.id()), page.as_str()) {
+                compat = true;
+            } else {
+                place("pteron_challenge_hint").show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label("This site is checking your browser and Pteron may not get through.");
+                        ui.horizontal(|ui| {
+                            if can {
+                                compat = ui.button("Open in compatibility tab").clicked();
+                            }
+                            open = ui.button("Open in default browser").clicked();
+                        });
+                    });
                 });
-            });
+            }
+            if compat && let Some(wrapped) = crate::compat_view::wrap(page) {
+                // (With the hand-over on, sites are not remembered: they go to Servo once the check passes.)
+                if !crate::pteron::settings().compat_tab_handoff &&
+                    let Some(host) = page.host_str()
+                {
+                    crate::compat_view::remember_later(host);
+                }
+                webview.load(wrapped);
+            }
             if open {
                 crate::downloads::open_in_default_browser(page.as_str());
+            }
+        } else if let Some(webview) = &active &&
+            let Some(page) = &page &&
+            let Some(host) = page.host_str().and_then(crate::compat_view::handoff_notice) &&
+            crate::compat_view::usable()
+        {
+            // Right after a hand-over to Servo: a way back for pages that Servo draws badly.
+            let (mut back, mut fine) = (false, false);
+            place("pteron_handoff_hint").show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(format!("{host} continues in Pteron's own engine."));
+                    ui.horizontal(|ui| {
+                        back = ui.button("Looks wrong? Use the compatibility tab").clicked();
+                        fine = ui.button("OK").clicked();
+                    });
+                });
+            });
+            ctx.request_repaint_after(Duration::from_millis(500));
+            if back {
+                crate::compat_view::mark_stay(&host);
+                crate::compat_view::keep_later(&host);
+                if let Some(wrapped) = crate::compat_view::wrap(page) {
+                    webview.load(wrapped);
+                }
+            }
+            if back || fine {
+                crate::compat_view::clear_handoff_notice();
             }
         } else if crate::compat::safe_notice_visible(&crate::pteron::settings().compat) {
             let mut ok = false;
@@ -1436,7 +1579,17 @@ impl Gui {
 
         let current_url_string = window
             .active_webview()
-            .and_then(|webview| Some(webview.url()?.to_string()))
+            .and_then(|webview| {
+                let url = webview.url()?;
+                // Pteron: a compatibility tab shows the page it is on, not its placeholder address.
+                if crate::compat_view::target(&url).is_some() {
+                    return self
+                        .compat_host
+                        .current_url(webview.id())
+                        .or_else(|| Some(crate::compat_view::display(url.as_str())));
+                }
+                Some(url.to_string())
+            })
             // Pteron: the new-tab page shows an empty address bar.
             .map(|url| if url == "servo:newtab" { String::new() } else { url });
         match current_url_string {
@@ -1577,36 +1730,36 @@ fn visuals_for(p: &crate::appearance::Palette) -> egui::Visuals {
     v.faint_bg_color = surface;
     v.extreme_bg_color = surface;
     v.code_bg_color = surface;
-    v.window_stroke = egui::Stroke::new(1.0, line);
+    v.window_stroke = egui::Stroke::new(1.0_f32, line);
     v.selection.bg_fill = accent.gamma_multiply(0.35);
-    v.selection.stroke = egui::Stroke::new(1.0, accent);
+    v.selection.stroke = egui::Stroke::new(1.0_f32, accent);
     v.hyperlink_color = accent;
     v.text_cursor.stroke.color = accent;
     let noninteractive = &mut v.widgets.noninteractive;
     noninteractive.bg_fill = bg;
     noninteractive.weak_bg_fill = bg;
-    noninteractive.bg_stroke = egui::Stroke::new(1.0, line);
-    noninteractive.fg_stroke = egui::Stroke::new(1.0, text);
+    noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, line);
+    noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, text);
     let inactive = &mut v.widgets.inactive;
     inactive.bg_fill = surface;
     inactive.weak_bg_fill = surface;
-    inactive.bg_stroke = egui::Stroke::new(1.0, line);
-    inactive.fg_stroke = egui::Stroke::new(1.0, text);
+    inactive.bg_stroke = egui::Stroke::new(1.0_f32, line);
+    inactive.fg_stroke = egui::Stroke::new(1.0_f32, text);
     let hovered = &mut v.widgets.hovered;
     hovered.bg_fill = mixed(p.surface, p.accent, 0.20);
     hovered.weak_bg_fill = mixed(p.surface, p.accent, 0.20);
-    hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.7));
-    hovered.fg_stroke = egui::Stroke::new(1.5, text);
+    hovered.bg_stroke = egui::Stroke::new(1.0_f32, accent.gamma_multiply(0.7));
+    hovered.fg_stroke = egui::Stroke::new(1.5_f32, text);
     let active = &mut v.widgets.active;
     active.bg_fill = mixed(p.surface, p.accent, 0.34);
     active.weak_bg_fill = mixed(p.surface, p.accent, 0.34);
-    active.bg_stroke = egui::Stroke::new(1.0, accent);
-    active.fg_stroke = egui::Stroke::new(2.0, text);
+    active.bg_stroke = egui::Stroke::new(1.0_f32, accent);
+    active.fg_stroke = egui::Stroke::new(2.0_f32, text);
     let open = &mut v.widgets.open;
     open.bg_fill = mixed(p.surface, p.accent, 0.26);
     open.weak_bg_fill = mixed(p.surface, p.accent, 0.26);
-    open.bg_stroke = egui::Stroke::new(1.0, line);
-    open.fg_stroke = egui::Stroke::new(1.0, text);
+    open.bg_stroke = egui::Stroke::new(1.0_f32, line);
+    open.fg_stroke = egui::Stroke::new(1.0_f32, text);
     v
 }
 
