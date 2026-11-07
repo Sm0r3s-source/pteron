@@ -1,6 +1,6 @@
 # Pteron
 
-A light web browser for Windows, built on the [Servo](https://servo.org) engine (v0.7.0) in Rust.
+A light web browser for Windows and Linux, built on the [Servo](https://servo.org) engine (v0.7.0) in Rust.
 Sidebar tabs, tabs that sleep to save memory, its own YouTube player and music app, a password
 manager, an ad blocker, and a Memory saver mode for older computers.
 
@@ -59,6 +59,49 @@ wrong or do not work (see [Known problems](#known-problems)).
 - Sync of bookmarks and settings through a folder you choose
 - Self-update from Settings, About
 - Crash log and problem report file
+
+## Benchmarks
+
+Memory of the whole browser (every process, private memory only) on a shared cloud machine, measured by the notebook in
+[`benchmarks/`](benchmarks/). All numbers are from one run of that notebook; the raw data is in
+[`benchmarks/results.csv`](benchmarks/results.csv).
+
+**Test machine:** Google Colab, Intel Xeon @ 2.20 GHz, 2 cores, 12.7 GB RAM, Ubuntu 24.04, no GPU (virtual screen, software
+rendering), 7 November 2026. Pteron is build 62 (Linux); servoshell is the official Servo v0.7.0 program; Firefox 159, Chrome 157.
+
+![Memory by browser](benchmarks/chart.png)
+
+**One page open** (median of 3 runs over 9 pages, 20 s after the page loaded)
+
+| Category | Browser | Memory | vs Chrome |
+|---|---|---|---|
+| Servo engine | servoshell (plain Servo) | 258 MB | 0.81x |
+| Servo engine | **Pteron** | **311 MB** | **0.98x** |
+| Chromium | Chrome | 317 MB | 1.00x |
+| Firefox (Gecko) | Firefox | 435 MB | 1.37x |
+
+**Ten tabs open** (one run; the second column is 7 minutes later, after Pteron's tabs had time to sleep)
+
+| Category | Browser | After 1 min | After 7 min |
+|---|---|---|---|
+| Chromium | Chrome | 571 MB | 586 MB |
+| Firefox (Gecko) | Firefox | 888 MB | 788 MB |
+| Servo engine | **Pteron** | 1298 MB | **946 MB** |
+| Servo engine | servoshell (plain Servo) | 1241 MB | 1241 MB |
+
+What this says, and what it does not:
+- With one page open Pteron uses about as much memory as Chrome and clearly less than Firefox. Plain Servo is lowest; Pteron's own
+  sidebar and features add about 50 MB.
+- With many tabs Pteron is heavier than Chrome and Firefox. Sleeping tabs cut it by about a quarter after a few minutes; plain
+  Servo has no such feature. Cutting the per-tab cost is the next job.
+- Memory is counted as private memory per process (USS). Chrome and Firefox share some memory between their processes, so
+  their numbers look slightly better than their real footprint; Servo runs as one process, so its number is exact.
+- The machine has no GPU, so Pteron's interface is drawn in software here. The ten-tab test is a single run. Numbers from other
+  machines will differ; compare browsers within one run only. Windows numbers are still to come.
+
+To repeat it, open [`benchmarks/servo_benchmark.ipynb`](benchmarks/servo_benchmark.ipynb) in Google Colab (Runtime, Run all) or
+Kaggle (turn Internet on), or run it in Ubuntu 24.04 or WSL2. It downloads the browsers, measures them, and writes `report.md`,
+`results.csv` and the chart.
 
 ## Installing and updating
 

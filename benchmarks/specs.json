@@ -1,0 +1,13 @@
+{
+  "platform": "Colab",
+  "cpu": "Intel(R) Xeon(R) CPU @ 2.20GHz",
+  "cores": 2,
+  "ram_gb": 12.7,
+  "gpu": "none (software rendering, virtual screen)",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.6.159+",
+  "glibc": "ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39",
+  "python": "3.13.18",
+  "display": "Xvfb 1366x768x24",
+  "date": "2026-11-07 20:17"
+}
