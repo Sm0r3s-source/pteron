@@ -63,7 +63,7 @@ wrong or do not work (see [Known problems](#known-problems)).
 ## Installing and updating
 
 Releases are published on the [Releases page](https://github.com/Sm0r3s-source/pteron/releases)
-as `Pteron-Setup.exe` and a zip. Pteron updates itself from **Settings, About**; nothing is
+as `Pteron-Setup.exe` and a zip for Windows, and `Pteron-build-N-linux64.tar.gz` for Linux (unpack it and run `./install.sh`; it installs for your user only, no root). Pteron updates itself from **Settings, About**; nothing is
 installed without your say-so. Windows may warn about the installer because it is not signed yet.
 
 ## Building
@@ -86,6 +86,13 @@ powershell -ExecutionPolicy Bypass -File .\pteron_updateNN.ps1 -Publish
 `-NoBuild` copies the files without building; `-Publish` builds, packages and publishes a release.
 The unit tests of Pteron's own modules run on every push (`.github/workflows/pteron-tests.yml`, `pteron_ci/`); a fully
 reproducible Servo build in CI is planned.
+
+### Linux
+
+The Linux build is new (update 62) and is built from the same source. In Linux or WSL2, put `pteron_update62.zip` and
+`pteron_build_linux.sh` in one folder and run `bash pteron_build_linux.sh` (about 25 GB of disk, 8 GB of memory). The
+compatibility tab on Linux uses WebKitGTK (`libwebkit2gtk-4.1`, `libgtk-3`) and is built in with `--features compat_linux`; it runs
+in X11 mode (Pteron uses X11/XWayland on Linux for now). Saved passwords are Windows only for now. macOS comes later.
 
 ## Where things are
 
@@ -111,7 +118,8 @@ media controls).
 - Protected (DRM) media does not work: Spotify, Netflix, Disney+ and similar
 - Strict anti-bot checks, including Cloudflare's "Just a moment" page, cannot be passed by Pteron's own engine; Pteron opens those pages in a compatibility tab instead (see above)
 - Some modern pages look wrong, stay blank or load slowly; the engine does not support every web feature
-- Windows only for now; no extensions and no private window
+- Windows and Linux (the Linux build is new and runs in X11 mode); macOS comes later; no extensions and no private window
+- Saved passwords work on Windows only for now
 - Videos play H.264 up to 1080p60; VP9, AV1 and 4K are not supported
 
 The same list, kept up to date, is in the browser at `servo:known-issues`.

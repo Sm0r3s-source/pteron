@@ -245,7 +245,7 @@ fn dpapi(protect: bool, input_b64: &str) -> Result<String, String> {
 
 #[cfg(not(windows))]
 fn dpapi(_protect: bool, _input_b64: &str) -> Result<String, String> {
-    Err("Saved passwords need Windows.".into())
+    Err("Saved passwords only work on Windows for now.".into())
 }
 
 fn protect(plain: &str) -> Result<String, String> {
@@ -278,6 +278,10 @@ pub(crate) fn handle_console(page: Option<&Url>, message: &str) -> bool {
 }
 
 fn on_login_sent(page: &Url, json: &str) {
+    // Passwords are only protected on Windows for now: elsewhere nothing is captured.
+    if !cfg!(windows) {
+        return;
+    }
     let Some(host) = site_key(page) else { return };
     let Ok(sent) = serde_json::from_str::<Value>(json) else { return };
     let field = |key: &str| sent.get(key).and_then(|v| v.as_str()).map(str::to_string);
@@ -295,6 +299,10 @@ fn on_login_sent(page: &Url, json: &str) {
 }
 
 fn on_form_seen(page: &Url) {
+    // Passwords are only protected on Windows for now: elsewhere nothing is captured.
+    if !cfg!(windows) {
+        return;
+    }
     let Some(host) = site_key(page) else { return };
     let mut state = STATE.lock_ok();
     let vault = state.vault.get_or_insert_with(load);
@@ -454,8 +462,9 @@ pub(crate) fn working() -> bool {
 
 // ---------------------------------------------------------------- settings page
 
+/// Saved passwords need Windows' own protection (DPAPI) for now, so elsewhere nothing is offered.
 pub(crate) fn enabled() -> bool {
-    with_vault(|v| v.enabled)
+    cfg!(windows) && with_vault(|v| v.enabled)
 }
 
 pub(crate) fn set_enabled(on: bool) {

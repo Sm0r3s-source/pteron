@@ -331,7 +331,7 @@ pub(crate) fn choose_folder_async() {
         return;
     }
     std::thread::spawn(|| {
-        let result = crate::appearance::run_chooser_script(FOLDER_SCRIPT).transpose();
+        let result = crate::appearance::run_chooser_script(FOLDER_SCRIPT, true).transpose();
         if let Ok(mut g) = PICKED.lock() {
             *g = result;
         }

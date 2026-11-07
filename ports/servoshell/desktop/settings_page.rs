@@ -1033,6 +1033,10 @@ fn privacy_section(
         ),
         "passwords logins saved autofill sign in remember",
         |ui| {
+            if !cfg!(windows) {
+                ui.label("Saved passwords work on Windows only for now. On this system Pteron does not offer to save them.");
+                return;
+            }
             let mut on = crate::passwords::enabled();
             if ui.checkbox(&mut on, "Offer to save passwords").changed() {
                 crate::passwords::set_enabled(on);

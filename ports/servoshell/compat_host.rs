@@ -11,6 +11,11 @@ use std::time::{Duration, Instant};
 
 use servo::WebViewId;
 
+// The engine library: `wry` on Windows and macOS, and on Linux (X11, WebKitGTK) when built with
+// the `compat_linux` feature, where the package is renamed so Windows builds never see it.
+#[cfg(all(target_os = "linux", pteron_wry))]
+use wry_linux as wry;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -20,7 +25,7 @@ use crate::locks::LockExt;
 const KEEP_HIDDEN_SECS: u64 = 120;
 
 struct Entry {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(pteron_wry)]
     view: Option<wry::WebView>,
     /// Where the tab was last seen (kept when the view is dropped).
     url: Arc<Mutex<String>>,
@@ -34,6 +39,8 @@ struct Entry {
     shown: bool,
     bounds: Option<(i32, i32, u32, u32)>,
     low: bool,
+    /// When the engine was last asked for its browser name.
+    agent_asked: Option<Instant>,
 }
 
 /// What a view's page did, set by that view's own handlers and read when it is shown.
@@ -63,7 +70,7 @@ pub(crate) struct Host {
     had_view: bool,
     /// The last view closed then: the engine's helper processes are ended a few seconds later.
     closed_at: Option<Instant>,
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(pteron_wry)]
     context: Option<wry::WebContext>,
 }
 
@@ -82,12 +89,47 @@ fn browser_args() -> String {
     args
 }
 
+/// Linux: WebKitGTK draws and works through GTK's main loop, which nothing else runs, so Pteron
+/// runs the waiting GTK events itself (a few times a second while a compatibility view is open).
+#[cfg(all(target_os = "linux", pteron_wry))]
+pub(crate) fn pump_gtk() {
+    if alive_count() > 0 && gtk_ready() {
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "linux", pteron_wry)))]
+pub(crate) fn pump_gtk() {}
+
+/// When the event loop has to wake up to run GTK's events (Linux, while a view is open).
+pub(crate) fn gtk_wake() -> Option<Instant> {
+    (cfg!(all(target_os = "linux", pteron_wry)) && alive_count() > 0).then(|| Instant::now() + Duration::from_millis(20))
+}
+
+/// GTK was started (once) on the thread that makes the views.
+#[cfg(all(target_os = "linux", pteron_wry))]
+fn gtk_ready() -> bool {
+    static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *READY.get_or_init(|| gtk::init().is_ok())
+}
+
+/// Linux: Pteron starts in X11 mode (through XWayland on a Wayland desktop) because the
+/// system web engine can only be placed inside an X11 window. `PTERON_WAYLAND=1` keeps Wayland
+/// (the compatibility tab is then not available).
+#[cfg(target_os = "linux")]
+pub(crate) fn prefer_x11() -> bool {
+    std::env::var_os("PTERON_WAYLAND").is_none_or(|v| v.is_empty() || v == "0") &&
+        std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty())
+}
+
 /// Where the mouse is, as the page itself reports it: 0 unknown or outside, 1 over the page, 2 at its left edge.
 static POINTER: AtomicU8 = AtomicU8::new(0);
 
 /// Added to every page: tells Pteron where the mouse is, because egui cannot see the mouse over
 /// a native view (the sidebar needs it to open and close).
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(pteron_wry)]
 const POINTER_SCRIPT: &str = "(()=>{let s='';const p=v=>{if(v!==s){s=v;try{window.ipc.postMessage(v)}catch(e){}}};\
 addEventListener('mousemove',e=>p(e.clientX<=5?'edge':'in'),{passive:true,capture:true});\
 document.addEventListener('mouseleave',()=>p('out'));})();";
@@ -101,7 +143,7 @@ static CLEANING: AtomicBool = AtomicBool::new(false);
 static ENGINE_AGENT: Mutex<String> = Mutex::new(String::new());
 
 /// The page title changed: the first real page after a browser check asks for a memory trim.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(pteron_wry)]
 fn title_changed(flags: &Flags, title: &str) {
     if crate::compat_view::is_challenge_title(title) {
         flags.saw_check.store(true, Relaxed);
@@ -128,7 +170,7 @@ pub(crate) struct Handoff {
 static OWN_AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Give Servo the cookies and the browser name (`apply` is the only place that needs the engine library).
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(pteron_wry)]
 pub(crate) fn apply_handoff(servo: &servo::Servo, handoff: &Handoff) {
     for text in &handoff.cookies {
         if let Ok(cookie) = wry::cookie::Cookie::parse(text.clone()) {
@@ -139,7 +181,7 @@ pub(crate) fn apply_handoff(servo: &servo::Servo, handoff: &Handoff) {
     servo.set_preference("user_agent", servo::PrefValue::Str(handoff.agent.clone()));
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(pteron_wry))]
 pub(crate) fn apply_handoff(_: &servo::Servo, _: &Handoff) {}
 
 /// The hand-over was switched off: Servo goes back to its own browser name.
@@ -200,7 +242,7 @@ impl Host {
         } else if self.had_view {
             self.had_view = false;
             self.closed_at = Some(Instant::now());
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(pteron_wry)]
             {
                 self.context = None;
             }
@@ -257,7 +299,7 @@ impl Host {
         let on_compat = active.is_some_and(|(_, placeholder)| crate::compat_view::target(placeholder).is_some());
         if on_compat && typing && !self.typing {
             window.focus_window();
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(pteron_wry)]
             for entry in self.entries.values() {
                 if let Some(view) = &entry.view {
                     let _ = view.focus_parent();
@@ -269,7 +311,7 @@ impl Host {
         // switched: when it goes away, the keyboard goes back to Pteron's own window.
         if self.was_shown && shown_id.is_none() {
             window.focus_window();
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(pteron_wry)]
             for entry in self.entries.values() {
                 if let Some(view) = &entry.view {
                     let _ = view.focus_parent();
@@ -282,7 +324,7 @@ impl Host {
                 self.entries.remove(&id);
             }
             let entry = self.entries.entry(id).or_insert_with(|| Entry {
-                #[cfg(any(windows, target_os = "macos"))]
+                #[cfg(pteron_wry)]
                 view: None,
                 url: Arc::new(Mutex::new(page.to_string())),
                 hidden_since: None,
@@ -291,6 +333,7 @@ impl Host {
                 shown: false,
                 bounds: None,
                 low: false,
+                agent_asked: None,
             });
             entry.hidden_since = None;
             self.show(window, id, area, points_to_pixels);
@@ -302,7 +345,7 @@ impl Host {
         self.clean_up_engine();
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(pteron_wry)]
     fn show(&mut self, window: &winit::window::Window, id: WebViewId, area: egui::Rect, scale: f32) {
         let rect = (
             (area.min.x * scale) as i32,
@@ -325,6 +368,7 @@ impl Host {
             };
             if let Some(entry) = self.entries.get_mut(&id) {
                 (entry.view, entry.shown, entry.bounds, entry.low) = (Some(view), true, Some(rect), false);
+                entry.agent_asked = None;
             }
             crate::crashlog::note(&format!("compatibility tab opened ({} open)", self.alive()));
         }
@@ -353,6 +397,16 @@ impl Host {
             }
             entry.low = low;
         }
+        // The engine's browser name, asked once the page runs (a script sent while the engine is
+        // still starting is held back and its answer is lost, so this is tried again until it comes).
+        if ENGINE_AGENT.lock_ok().is_empty() && entry.agent_asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+            entry.agent_asked = Some(Instant::now());
+            let _ = view.evaluate_script_with_callback("navigator.userAgent", |json| {
+                if let Ok(agent) = serde_json::from_str::<String>(&json) {
+                    *ENGINE_AGENT.lock_ok() = agent;
+                }
+            });
+        }
         // A real page loaded in this view: if the site passed a browser check, give the pass to
         // Servo (once the engine's browser name is known; until then this is tried again).
         let ready = entry.flags.clone();
@@ -368,7 +422,7 @@ impl Host {
 
     /// The cookies of the page the view is on, when they include a Cloudflare pass, and the engine's
     /// browser name; `None` when there is nothing to hand over (or the site already failed once).
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(pteron_wry)]
     fn prepare_handoff(&self, id: WebViewId) -> Option<Handoff> {
         let entry = self.entries.get(&id)?;
         let view = entry.view.as_ref()?;
@@ -388,11 +442,16 @@ impl Host {
         Some(Handoff { id, page, cookies: cookies.iter().map(|c| c.to_string()).collect(), agent })
     }
 
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(pteron_wry))]
     fn show(&mut self, _: &winit::window::Window, _: WebViewId, _: egui::Rect, _: f32) {}
 
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(pteron_wry)]
     fn create(&mut self, window: &winit::window::Window, url: &Arc<Mutex<String>>, flags: Arc<Flags>, bounds: wry::Rect) -> Option<wry::WebView> {
+        #[cfg(target_os = "linux")]
+        if !gtk_ready() {
+            crate::crashlog::note("compatibility tab could not start: GTK did not start");
+            return None;
+        }
         let dir = dirs::data_dir()?.join(crate::pteron::APP_NAME).join("compat");
         let context = self.context.get_or_insert_with(|| wry::WebContext::new(Some(dir)));
         let follow = url.clone();
@@ -424,16 +483,7 @@ impl Host {
             builder.with_additional_browser_args(browser_args())
         };
         match builder.build_as_child(window) {
-            Ok(view) => {
-                if ENGINE_AGENT.lock_ok().is_empty() {
-                    let _ = view.evaluate_script_with_callback("navigator.userAgent", |json| {
-                        if let Ok(agent) = serde_json::from_str::<String>(&json) {
-                            *ENGINE_AGENT.lock_ok() = agent;
-                        }
-                    });
-                }
-                Some(view)
-            },
+            Ok(view) => Some(view),
             Err(error) => {
                 crate::crashlog::note(&format!("compatibility tab could not start: {error}"));
                 None
@@ -444,15 +494,15 @@ impl Host {
 
 impl Entry {
     fn is_open(&self) -> bool {
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(pteron_wry)]
         return self.view.is_some();
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(pteron_wry))]
         false
     }
 
     /// Not on screen: hide, ask for less memory, and drop the view after a while.
     fn hide(&mut self, keep: Duration) {
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(pteron_wry)]
         if let Some(view) = &self.view {
             // Just went off screen (this runs every frame: the engine is only told once).
             if self.shown {
@@ -475,7 +525,7 @@ impl Entry {
                 crate::crashlog::note("a hidden compatibility tab was closed to save memory (it reloads when opened)");
             }
         }
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(pteron_wry))]
         let _ = (&self.hidden_since, keep);
     }
 }

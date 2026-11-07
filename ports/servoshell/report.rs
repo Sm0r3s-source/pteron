@@ -129,7 +129,7 @@ pub(crate) fn save(note: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Opens the folder with the file selected (Windows only; elsewhere does nothing).
+/// Opens the folder with the file selected (on Linux: the folder).
 pub(crate) fn show_in_folder(path: &std::path::Path) {
     #[cfg(windows)]
     {
@@ -138,7 +138,9 @@ pub(crate) fn show_in_folder(path: &std::path::Path) {
             .spawn();
     }
     #[cfg(not(windows))]
-    let _ = path;
+    if let Some(parent) = path.parent() {
+        let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+    }
 }
 
 #[cfg(test)]

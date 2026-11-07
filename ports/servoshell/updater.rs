@@ -12,7 +12,7 @@ use crate::streamproxy::UPSTREAM_USER_AGENT;
 
 /// This program's own number. Every release is tagged `build-<number>`; a bigger number than
 /// this one means an update is available. (Raised with every update.)
-pub(crate) const BUILD: u32 = 61;
+pub(crate) const BUILD: u32 = 62;
 
 /// Where releases are published: `https://github.com/<REPO>/releases`.
 pub(crate) const REPO: &str = "Sm0r3s-source/pteron";
@@ -60,9 +60,9 @@ pub(crate) fn busy() -> bool {
     matches!(status(), Status::Checking | Status::Downloading { .. })
 }
 
-/// Updates work for the Windows build only (the others come from the package manager).
+/// Updates work for the Windows and Linux builds (macOS will follow).
 pub(crate) fn supported() -> bool {
-    cfg!(windows)
+    cfg!(any(windows, target_os = "linux"))
 }
 
 // ---------------------------------------------------------------- reading GitHub's answer
@@ -95,17 +95,25 @@ fn is_release_url(url: &str) -> bool {
     url.len() >= prefix.len() && url.is_char_boundary(prefix.len()) && url[..prefix.len()].eq_ignore_ascii_case(&prefix)
 }
 
-/// The release described by GitHub's `releases/latest` answer, if it is a Pteron zip release.
+/// Whether `name` is the download for this system: `Pteron-build-N-win64.zip` on Windows,
+/// `Pteron-build-N-linux64.tar.gz` on Linux.
+fn is_package(name: &str, linux: bool) -> bool {
+    let lower = name.to_ascii_lowercase();
+    name.contains("Pteron") &&
+        if linux { lower.ends_with(".tar.gz") && lower.contains("linux") } else { lower.ends_with(".zip") && !lower.contains("linux") }
+}
+
+/// The release described by GitHub's `releases/latest` answer, if it has a download for this system.
 pub(crate) fn parse_release(text: &str) -> Option<Release> {
+    parse_release_for(text, cfg!(target_os = "linux"))
+}
+
+fn parse_release_for(text: &str, linux: bool) -> Option<Release> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let tag = value.get("tag_name")?.as_str()?;
     let build = parse_build(tag)?;
     let assets = value.get("assets")?.as_array()?;
-    let zip = assets.iter().find(|a| {
-        a.get("name")
-            .and_then(|n| n.as_str())
-            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".zip") && n.contains("Pteron"))
-    })?;
+    let zip = assets.iter().find(|a| a.get("name").and_then(|n| n.as_str()).is_some_and(|n| is_package(n, linux)))?;
     let zip_name = zip.get("name")?.as_str()?;
     let url = zip.get("browser_download_url")?.as_str()?.to_string();
     if !is_release_url(&url) || url.contains(['"', ' ', '\'', '`']) {
@@ -303,7 +311,7 @@ pub(crate) fn check_async() {
     set(Status::Checking);
     std::thread::spawn(|| {
         let result = fetch_text(&format!("https://api.github.com/repos/{REPO}/releases/latest"))
-            .and_then(|text| parse_release(&text).ok_or_else(|| "The newest release has no Pteron zip file.".to_string()));
+            .and_then(|text| parse_release(&text).ok_or_else(|| "The newest release has no download for this system.".to_string()));
         if let Ok(mut done) = CHECKED_THIS_RUN.lock() {
             *done = true;
         }
@@ -438,7 +446,8 @@ fn download(release: &Release) -> Result<PathBuf, String> {
     let dir = update_dir();
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not make a download folder: {e}"))?;
-    let zip = dir.join(format!("Pteron-build-{}.zip", release.build));
+    let extension = if cfg!(target_os = "linux") { "tar.gz" } else { "zip" };
+    let zip = dir.join(format!("Pteron-build-{}.{extension}", release.build));
     let errfile = dir.join("download.err");
     let mut child = with_curl(|mut command| {
         command
@@ -497,6 +506,7 @@ fn download(release: &Release) -> Result<PathBuf, String> {
 /// PowerShell that waits for Pteron to close, unpacks the zip, copies it over this folder
 /// and starts Pteron again. A failure is written to `update-error.txt` and the old copy is
 /// started again.
+#[cfg(windows)]
 const APPLY_SCRIPT: &str = r#"param([int]$ProcId, [string]$Zip, [string]$Dir, [string]$Exe)
 $ErrorActionPreference = 'Stop'
 $data = Join-Path $env:APPDATA 'Pteron'
@@ -526,8 +536,44 @@ try {
 Start-Process -FilePath $Exe
 "#;
 
+/// Linux: waits for Pteron to close, unpacks the archive, copies it over the install folder and
+/// starts Pteron again. A failure is written to `update-error.txt` and the old copy is started again.
+/// Arguments: process id, archive, install folder, program.
+#[cfg(target_os = "linux")]
+const APPLY_SH: &str = r#"#!/bin/sh
+PID="$1"; ARCHIVE="$2"; DIR="$3"; EXE="$4"
+DATA="${XDG_CONFIG_HOME:-$HOME/.config}/Pteron"
+mkdir -p "$DATA"
+LOG="$DATA/update.log"
+log() { echo "$(date +%Y-%m-%dT%H:%M:%S) $1" >> "$LOG"; }
+fail() { log "update FAILED: $1"; echo "$1" > "$DATA/update-error.txt"; }
+log "update started, waiting for Pteron ($PID) to close"
+i=0
+while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done
+if kill -0 "$PID" 2>/dev/null; then kill -9 "$PID" 2>/dev/null; sleep 1; fi
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/pteron_update_stage.XXXXXX")" || { fail "Could not make a work folder."; "$EXE" >/dev/null 2>&1 & exit 0; }
+if tar -xzf "$ARCHIVE" -C "$STAGE"; then
+  ROOT="$STAGE"
+  if [ "$(ls -A "$STAGE" | wc -l)" -eq 1 ] && [ -d "$STAGE/$(ls -A "$STAGE")" ]; then ROOT="$STAGE/$(ls -A "$STAGE")"; fi
+  if [ ! -f "$ROOT/pteron" ]; then
+    fail "The update file does not contain pteron."
+  elif cp -af "$ROOT"/. "$DIR"/ 2>>"$LOG"; then
+    chmod +x "$DIR/pteron" 2>/dev/null
+    rm -f "$ARCHIVE" "$DATA/update-error.txt"
+    log "update done"
+  else
+    fail "Copying the new files failed (is $DIR writable?)."
+  fi
+else
+  fail "The update file could not be unpacked."
+fi
+rm -rf "$STAGE"
+nohup "$EXE" >/dev/null 2>&1 &
+"#;
+
 /// The same job for machines where PowerShell cannot be started: `tar` (part of Windows 10 and
 /// later) unpacks the zip, `robocopy` copies it over.
+#[cfg(windows)]
 const APPLY_CMD: &str = r#"@echo off
 setlocal
 set "DATA=%APPDATA%\Pteron"
@@ -670,12 +716,12 @@ fn launch_installer_inner() -> Result<(), String> {
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("Could not find the program folder.")?.to_path_buf();
-    let script = update_dir().join("apply.ps1");
-    let cmd_script = update_dir().join("apply.cmd");
-    std::fs::write(&script, APPLY_SCRIPT).map_err(|e| format!("Could not prepare the update: {e}"))?;
-    std::fs::write(&cmd_script, APPLY_CMD.replace('\n', "\r\n")).map_err(|e| format!("Could not prepare the update: {e}"))?;
     #[cfg(windows)]
     {
+        let script = update_dir().join("apply.ps1");
+        let cmd_script = update_dir().join("apply.cmd");
+        std::fs::write(&script, APPLY_SCRIPT).map_err(|e| format!("Could not prepare the update: {e}"))?;
+        std::fs::write(&cmd_script, APPLY_CMD.replace('\n', "\r\n")).map_err(|e| format!("Could not prepare the update: {e}"))?;
         log_line(&format!("starting the update helper for {}", zip.display()));
         let mut problems: Vec<String> = Vec::new();
         for (name, mut command) in helper_commands(&script, &cmd_script, &zip, &dir, &exe) {
@@ -705,10 +751,31 @@ fn launch_installer_inner() -> Result<(), String> {
         }
         Err(format!("Could not start the update. {}", problems.join("; ")))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = (dir, exe, script, cmd_script);
-        Err("Updates are only built in for Windows.".into())
+        use std::os::unix::process::CommandExt;
+        let script = update_dir().join("apply.sh");
+        std::fs::write(&script, APPLY_SH).map_err(|e| format!("Could not prepare the update: {e}"))?;
+        log_line(&format!("starting the update helper for {}", zip.display()));
+        // Its own process group, so it keeps running when Pteron closes.
+        std::process::Command::new("sh")
+            .arg(&script)
+            .arg(std::process::id().to_string())
+            .arg(&zip)
+            .arg(&dir)
+            .arg(&exe)
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Could not start the update: {e}"))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (dir, exe, zip);
+        Err("Updates are not built in for this system yet.".into())
     }
 }
 
@@ -751,7 +818,7 @@ mod tests {
     #[test]
     fn reads_a_release() {
         let url = format!("{}build-35/Pteron-build-35-win64.zip", download_prefix());
-        let release = parse_release(&sample(&url)).unwrap();
+        let release = parse_release_for(&sample(&url), false).unwrap();
         assert_eq!(release.build, 35);
         assert_eq!(release.size, 123456);
         assert_eq!(release.url, url);
@@ -761,9 +828,29 @@ mod tests {
     }
 
     #[test]
+    fn each_system_gets_its_own_download() {
+        let text = serde_json::json!({
+            "tag_name": "build-62",
+            "assets": [
+                {"name": "Pteron-build-62-win64.zip", "browser_download_url": format!("{}build-62/Pteron-build-62-win64.zip", download_prefix()), "size": 10},
+                {"name": "Pteron-build-62-linux64.tar.gz", "browser_download_url": format!("{}build-62/Pteron-build-62-linux64.tar.gz", download_prefix()), "size": 20},
+                {"name": "Pteron-build-62-linux64.tar.gz.sha256", "browser_download_url": format!("{}build-62/Pteron-build-62-linux64.tar.gz.sha256", download_prefix()), "size": 90},
+                {"name": "Pteron-build-62-linux64.tar.gz.sig", "browser_download_url": format!("{}build-62/Pteron-build-62-linux64.tar.gz.sig", download_prefix()), "size": 90}
+            ]
+        })
+        .to_string();
+        let windows = parse_release_for(&text, false).unwrap();
+        assert!(windows.url.ends_with("win64.zip") && windows.sha256_url.is_none());
+        let linux = parse_release_for(&text, true).unwrap();
+        assert!(linux.url.ends_with("linux64.tar.gz") && linux.size == 20);
+        assert!(linux.sha256_url.unwrap().ends_with(".tar.gz.sha256") && linux.sig_url.unwrap().ends_with(".tar.gz.sig"));
+        assert!(parse_release_for(&sample(&format!("{}x/Pteron-build-35-win64.zip", download_prefix())), true).is_none(), "a Windows-only release has nothing for Linux");
+    }
+
+    #[test]
     fn refuses_downloads_from_other_places() {
-        assert!(parse_release(&sample("https://evil.example/Pteron.zip")).is_none());
-        assert!(parse_release(&sample("http://github.com/x/y/releases/download/a/Pteron.zip")).is_none());
+        assert!(parse_release_for(&sample("https://evil.example/Pteron.zip"), false).is_none());
+        assert!(parse_release_for(&sample("http://github.com/x/y/releases/download/a/Pteron.zip"), false).is_none());
         assert!(parse_release("not json").is_none());
         assert!(parse_release("{\"tag_name\":\"latest\",\"assets\":[]}").is_none());
     }

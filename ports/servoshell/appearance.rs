@@ -324,9 +324,10 @@ pub(crate) fn choose_picture_async() {
 
 /// Runs a small PowerShell script that shows a Windows chooser and writes the chosen path into
 /// the file named by its `-Out` parameter. `Ok(None)` when the user closed it without choosing.
-pub(crate) fn run_chooser_script(script_text: &str) -> Result<Option<String>, String> {
+pub(crate) fn run_chooser_script(script_text: &str, folder: bool) -> Result<Option<String>, String> {
     #[cfg(windows)]
     {
+        let _ = folder;
         use std::os::windows::process::CommandExt;
         let dir = std::env::temp_dir().join("pteron_pick");
         let _ = std::fs::remove_dir_all(&dir);
@@ -368,13 +369,47 @@ pub(crate) fn run_chooser_script(script_text: &str) -> Result<Option<String>, St
     #[cfg(not(windows))]
     {
         let _ = script_text;
-        Err("Choosing is only built in for Windows.".into())
+        linux_chooser(folder)
     }
+}
+
+/// Linux: the desktop's own chooser through `zenity` (GNOME and most others) or `kdialog` (KDE).
+/// `Ok(None)` when the user closed it without choosing.
+#[cfg(not(windows))]
+fn linux_chooser(folder: bool) -> Result<Option<String>, String> {
+    let title = if folder { "Choose a folder" } else { "Choose a background picture" };
+    let mut tries: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut zenity = vec!["--file-selection".to_string(), format!("--title={title}")];
+    if folder {
+        zenity.push("--directory".into());
+    } else {
+        zenity.push("--file-filter=Pictures | *.jpg *.jpeg *.png *.webp *.gif".into());
+    }
+    tries.push(("zenity", zenity));
+    let home = ::dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_else(|| ".".into());
+    tries.push((
+        "kdialog",
+        if folder {
+            vec!["--getexistingdirectory".into(), home.clone()]
+        } else {
+            vec!["--getopenfilename".into(), home, "*.jpg *.jpeg *.png *.webp *.gif|Pictures".into()]
+        },
+    ));
+    for (program, args) in tries {
+        match std::process::Command::new(program).args(&args).stdin(std::process::Stdio::null()).output() {
+            Ok(out) => {
+                let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return Ok((out.status.success() && !chosen.is_empty()).then_some(chosen));
+            },
+            Err(_) => continue,
+        }
+    }
+    Err("Install zenity or kdialog to choose a file.".into())
 }
 
 /// `Ok(None)` when the user closed the dialog without choosing.
 fn choose_picture() -> Result<Option<()>, String> {
-    match run_chooser_script(PICK_SCRIPT)? {
+    match run_chooser_script(PICK_SCRIPT, false)? {
         Some(chosen) => {
             save_picture(std::path::Path::new(&chosen))?;
             Ok(Some(()))

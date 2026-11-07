@@ -144,7 +144,7 @@ pub(crate) fn mark_broken() {
 }
 
 pub(crate) fn usable() -> bool {
-    cfg!(any(windows, target_os = "macos")) && !BROKEN.load(Ordering::Relaxed)
+    cfg!(pteron_wry) && !BROKEN.load(Ordering::Relaxed)
 }
 
 /// A listed site opened by link or address: the compatibility address to load instead.
@@ -262,7 +262,7 @@ pub(crate) fn placeholder_html(url: &Url) -> String {
     let note = if usable() {
         "This page is shown by your system's web engine."
     } else {
-        "The system web engine is not available here (on Windows it is WebView2), so this page cannot be shown. Copy the address and open it in another browser."
+        "The system web engine is not available here (on Windows it is WebView2, on Linux WebKitGTK in an X11 session), so this page cannot be shown. Copy the address and open it in another browser."
     };
     format!(
         "<!doctype html><meta charset=\"utf-8\"><title>{}</title>\
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn redirect_follows_the_list_and_mode() {
-        if !cfg!(any(windows, target_os = "macos")) {
+        if !cfg!(pteron_wry) {
             return;
         }
         let mut settings = crate::pteron::Settings::default();

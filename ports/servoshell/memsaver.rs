@@ -194,7 +194,17 @@ pub(crate) fn process_mb() -> Option<u64> {
     }
 }
 
-#[cfg(not(windows))]
+/// Linux: the resident memory from `/proc/self/statm` (second number, in pages).
+#[cfg(target_os = "linux")]
+pub(crate) fn process_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let pages: u64 = text.split_whitespace().nth(1)?.parse().ok()?;
+    // SAFETY: `sysconf` only reads a system constant.
+    let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok().filter(|p| *p > 0).unwrap_or(4096);
+    Some(pages * page / MB)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn process_mb() -> Option<u64> {
     None
 }
