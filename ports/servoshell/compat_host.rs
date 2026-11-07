@@ -11,10 +11,8 @@ use std::time::{Duration, Instant};
 
 use servo::WebViewId;
 
-// The engine library: `wry` on Windows and macOS, and on Linux (X11, WebKitGTK) when built with
-// the `compat_linux` feature, where the package is renamed so Windows builds never see it.
-#[cfg(all(target_os = "linux", pteron_wry))]
-use wry_linux as wry;
+// The engine library is `wry`: WebView2 on Windows, WebKit on macOS, and WebKitGTK on Linux (X11) when
+// built with the `compat_linux` feature.
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;

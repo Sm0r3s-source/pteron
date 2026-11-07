@@ -54,7 +54,7 @@ bundled = ["servo/bundled"]
 ## Individual features below this line
 # Pteron: the compatibility tab on Linux (WebKitGTK inside an X11 window). Needs libwebkit2gtk-4.1 and
 # libgtk-3 to build and to run, so it is only on when asked for (`--features compat_linux`).
-compat_linux = ["dep:wry_linux", "dep:gtk"]
+compat_linux = ["dep:wry", "dep:gtk"]
 baked-in-resources = ["servo/baked-in-resources"]
 bundled_freetype = ["servo/bundled_freetype"]
 crown = ["servo/crown"]
@@ -164,9 +164,9 @@ signal-hook-registry = { workspace = true }
 wry = "0.57"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# (Renamed, so the code can tell it from the Windows and macOS one; only built with `compat_linux`.)
+# (Only built with `compat_linux`.)
 gtk = { version = "0.18", optional = true }
-wry_linux = { package = "wry", version = "0.57", optional = true }
+wry = { version = "0.57", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 servo = { workspace = true, features = ["no-wgl"] }
