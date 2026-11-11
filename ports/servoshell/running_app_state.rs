@@ -796,7 +796,12 @@ impl WebViewDelegate for RunningAppState {
         if let Some(steps) = crate::compat_view::history_skip(&format!("{:?}", webview.id()), &entries, current) {
             let _ = if steps < 0 { webview.go_back(steps.unsigned_abs()) } else { webview.go_forward(steps.unsigned_abs()) };
         }
-        self.window_for_webview(&webview).set_needs_update();
+        let window = self.window_for_webview(&webview);
+        // Pages dropped from the back/forward cache are freed at the next garbage collection.
+        if entries.len() > 1 {
+            window.schedule_memory_cleanup(std::time::Duration::from_secs(8));
+        }
+        window.set_needs_update();
     }
 
     fn notify_page_title_changed(&self, webview: WebView, title: Option<String>) {
@@ -940,7 +945,11 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn notify_load_status_changed(&self, webview: WebView, status: LoadStatus) {
-        self.window_for_webview(&webview).set_needs_update();
+        let window = self.window_for_webview(&webview);
+        window.set_needs_update();
+        if status != LoadStatus::HeadParsed {
+            window.note_load_status(&webview, status == LoadStatus::Complete);
+        }
 
         if status == LoadStatus::Complete {
             if let Some(url) = webview.url() {
@@ -1057,6 +1066,13 @@ impl WebViewDelegate for RunningAppState {
         }
         // Pteron: the "Check this page" report.
         if crate::sitecheck::handle_console(&message) {
+            return;
+        }
+        // Pteron: how far the page is scrolled, for tabs that go to sleep.
+        if self
+            .maybe_window_for_webview(&webview)
+            .is_some_and(|window| window.handle_scroll_message(webview.id(), &message))
+        {
             return;
         }
         self.platform_window_for_webview(&webview)

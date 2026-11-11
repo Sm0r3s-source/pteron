@@ -383,6 +383,10 @@ pub struct Preferences {
     /// `session_history_max_length` steps in the past will be discarded. Navigating forward
     /// or backward to that entry will cause the entire page to be reloaded.
     pub session_history_max_length: i64,
+    /// Pteron: frames per second for animations and scrolling when the embedder has no vsync
+    /// signal and the built-in timer drives painting. Servo used 120; most screens show 60, so
+    /// the extra frames cost CPU without being seen.
+    pub paint_frame_rate: i64,
     /// The background color of shell's viewport. This will be used by OpenGL's `glClearColor`.
     pub shell_background_color_rgba: [f64; 4],
     pub webgl_testing_context_creation_error: bool,
@@ -588,6 +592,7 @@ impl Preferences {
             network_max_content_length: 5 * 1024 * 1024,
             perf_thread_boost_enabled: true,
             session_history_max_length: 20,
+            paint_frame_rate: 60,
             shell_background_color_rgba: [1.0, 1.0, 1.0, 1.0],
             log_filter: String::new(),
             thread_pool_workers_max: 4,

@@ -629,6 +629,8 @@ fn update_preferences_from_command_line_arguments(
         if let Some(value) = profile.http_cache {
             preferences.network_http_cache_size = value;
         }
+        preferences.session_history_max_length = profile.history_pages;
+        preferences.paint_frame_rate = profile.frame_rate;
     }
 
     if let Some(layout_threads) = cmd_args.layout_threads {

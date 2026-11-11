@@ -72,6 +72,13 @@ pub(crate) struct Profile {
     pub tab_sleep_cap_secs: Option<u64>,
     /// Seconds in the background before memory is handed back to Windows.
     pub trim_after_secs: Option<u64>,
+    /// How many earlier pages per tab stay loaded for Back (older ones reload when visited).
+    /// The engine keeps 20, each a whole page in memory. Never 0: the engine then keeps more.
+    pub history_pages: i64,
+    /// Frames per second for animations and scrolling (the engine's own default was 120).
+    pub frame_rate: i64,
+    /// At most this many background tabs stay awake; the longest unused sleep first.
+    pub awake_tabs: Option<usize>,
 }
 
 const MB: u64 = 1024 * 1024;
@@ -85,11 +92,16 @@ pub(crate) fn profile(level: Level) -> Profile {
             async_workers: None,
             canvas_workers: None,
             webrender_workers: None,
-            http_cache: None,
+            // The engine keeps up to 5000 responses in memory whatever their size; 2000 still
+            // covers the last few dozen pages.
+            http_cache: Some(2000),
             read_ahead_pieces: 5,
             read_ahead_bytes: 32 * MB,
             tab_sleep_cap_secs: None,
             trim_after_secs: None,
+            history_pages: 2,
+            frame_rate: 60,
+            awake_tabs: None,
         },
         Level::Low => Profile {
             layout_threads: Some(2),
@@ -103,6 +115,9 @@ pub(crate) fn profile(level: Level) -> Profile {
             read_ahead_bytes: 16 * MB,
             tab_sleep_cap_secs: Some(180),
             trim_after_secs: Some(15),
+            history_pages: 1,
+            frame_rate: 60,
+            awake_tabs: Some(8),
         },
         Level::Lowest => Profile {
             layout_threads: Some(1),
@@ -116,6 +131,9 @@ pub(crate) fn profile(level: Level) -> Profile {
             read_ahead_bytes: 8 * MB,
             tab_sleep_cap_secs: Some(60),
             trim_after_secs: Some(8),
+            history_pages: 1,
+            frame_rate: 30,
+            awake_tabs: Some(4),
         },
     }
 }
@@ -144,6 +162,65 @@ pub(crate) fn tab_sleep_secs(user_secs: u64) -> u64 {
         Some(cap) => user_secs.min(cap),
         None => user_secs,
     }
+}
+
+// ---------------------------------------------------------------- memory of the computer
+
+/// Free (available) and total memory of the computer, in MB.
+#[cfg(windows)]
+pub(crate) fn system_memory_mb() -> Option<(u64, u64)> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: the struct is plain numbers and the call only fills it in.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0)
+        .then(|| (status.ullAvailPhys / MB, status.ullTotalPhys / MB))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn system_memory_mb() -> Option<(u64, u64)> {
+    parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn system_memory_mb() -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
+    let kb = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key)?.split_whitespace().next()?.parse::<u64>().ok())
+    };
+    Some((kb("MemAvailable:")? / 1024, kb("MemTotal:")? / 1024))
+}
+
+/// The computer is short of memory: less than a tenth of it is free (at least 400 MB and at
+/// most 1 GB counts as "short", whatever the size of the computer).
+pub(crate) fn memory_is_low(available_mb: u64, total_mb: u64) -> bool {
+    available_mb < (total_mb / 10).clamp(400, 1024)
+}
+
+/// How many background tabs should go to sleep before their normal time: those over the level's
+/// limit of awake tabs, and one more every ten seconds while the computer is short of memory.
+pub(crate) fn tabs_to_sleep_early(awake_background_tabs: usize) -> usize {
+    use crate::locks::LockExt;
+    static LAST_CHECK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let over_limit = profile(level())
+        .awake_tabs
+        .map_or(0, |limit| awake_background_tabs.saturating_sub(limit));
+    let mut last = LAST_CHECK.lock_ok();
+    if last.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+        return over_limit;
+    }
+    *last = Some(std::time::Instant::now());
+    drop(last);
+    let low = system_memory_mb().is_some_and(|(available, total)| memory_is_low(available, total));
+    if low && awake_background_tabs > 0 {
+        crate::crashlog::note("memory: the computer is short of memory, a background tab sleeps early");
+    }
+    over_limit.max(usize::from(low))
 }
 
 // ---------------------------------------------------------------- background trimming
@@ -194,19 +271,125 @@ pub(crate) fn process_mb() -> Option<u64> {
     }
 }
 
-/// Linux: the resident memory from `/proc/self/statm` (second number, in pages).
+/// Linux: the resident memory from `/proc/<process>/statm` (second number, in pages), in bytes.
 #[cfg(target_os = "linux")]
-pub(crate) fn process_mb() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/self/statm").ok()?;
+fn resident_bytes(process: &str) -> Option<u64> {
+    let text = std::fs::read_to_string(format!("/proc/{process}/statm")).ok()?;
     let pages: u64 = text.split_whitespace().nth(1)?.parse().ok()?;
     // SAFETY: `sysconf` only reads a system constant.
     let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok().filter(|p| *p > 0).unwrap_or(4096);
-    Some(pages * page / MB)
+    Some(pages * page)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn process_mb() -> Option<u64> {
+    resident_bytes("self").map(|bytes| bytes / MB)
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn process_mb() -> Option<u64> {
     None
+}
+
+/// Memory in MB of the programs Pteron started: the system web engine behind compatibility tabs
+/// (WebView2, WebKitGTK) runs as separate processes that `process_mb` does not see. Looked up
+/// at most every two seconds.
+pub(crate) fn helpers_mb() -> u64 {
+    use crate::locks::LockExt;
+    static LAST: std::sync::Mutex<Option<(std::time::Instant, u64)>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock_ok();
+    if let Some((at, mb)) = *last &&
+        at.elapsed() < Duration::from_secs(2)
+    {
+        return mb;
+    }
+    let mb = helper_bytes() / MB;
+    *last = Some((std::time::Instant::now(), mb));
+    mb
+}
+
+/// The processes started by `root`, directly or through others, from (process, parent) pairs.
+fn descendants(root: u32, processes: &[(u32, u32)]) -> Vec<u32> {
+    let mut found = vec![root];
+    let mut next = 0;
+    while next < found.len() {
+        let children: Vec<u32> = processes
+            .iter()
+            .filter(|(process, parent)| *parent == found[next] && !found.contains(process))
+            .map(|(process, _)| *process)
+            .collect();
+        found.extend(children);
+        next += 1;
+    }
+    found.remove(0);
+    found
+}
+
+#[cfg(windows)]
+fn helper_bytes() -> u64 {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    let mut processes = Vec::new();
+    let mut bytes = 0;
+    // SAFETY: the structures are zeroed and sized as the calls require, and every handle is
+    // checked before use and closed afterwards.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return 0;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            processes.push((entry.th32ProcessID, entry.th32ParentProcessID));
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        for process in descendants(std::process::id(), &processes) {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process);
+            if handle.is_null() {
+                continue;
+            }
+            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            counters.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            if K32GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0 {
+                bytes += counters.WorkingSetSize as u64;
+            }
+            CloseHandle(handle);
+        }
+    }
+    bytes
+}
+
+#[cfg(target_os = "linux")]
+fn helper_bytes() -> u64 {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return 0;
+    };
+    let processes: Vec<(u32, u32)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let process: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            // "12 (name) S 7 ...": the name may hold spaces, so read after the last ')'.
+            let parent = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()?;
+            Some((process, parent))
+        })
+        .collect();
+    descendants(std::process::id(), &processes)
+        .iter()
+        .filter_map(|process| resident_bytes(&process.to_string()))
+        .sum()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn helper_bytes() -> u64 {
+    0
 }
 
 /// Write a line to the crash log when the memory changed by a fifth or ten minutes passed.
@@ -234,10 +417,7 @@ pub(crate) fn start_logger() {
             if should_log(last.map(|(m, _)| m), mb, since) {
                 let compat = match crate::compat_host::alive_count() {
                     0 => String::new(),
-                    n => match crate::compat_host::engine_mb() {
-                        Some(engine) => format!(", {n} compatibility tabs (system engine about {engine} MB in all, other programs included)"),
-                        None => format!(", {n} compatibility tabs"),
-                    },
+                    n => format!(", {n} compatibility tabs (system web engine: {} MB more)", helpers_mb()),
                 };
                 crate::crashlog::note(&format!(
                     "memory: {mb} MB in use, {} tabs, memory saver {}{compat}",
@@ -264,9 +444,10 @@ mod tests {
     }
 
     #[test]
-    fn normal_changes_nothing() {
+    fn normal_keeps_full_speed() {
         let p = profile(Level::Normal);
-        assert!(p.layout_threads.is_none() && p.workers.is_none() && p.http_cache.is_none());
+        assert!(p.layout_threads.is_none() && p.workers.is_none());
+        assert!(p.http_cache.is_some_and(|n| n >= profile(Level::Low).http_cache.unwrap_or(0)));
         assert!(p.tab_sleep_cap_secs.is_none() && p.trim_after_secs.is_none());
         assert_eq!((p.read_ahead_pieces, p.read_ahead_bytes), (5, 32 * MB));
     }
@@ -286,6 +467,42 @@ mod tests {
             }
             assert!(p.read_ahead_pieces >= 1);
         }
+        assert!(profile(Level::Normal).history_pages >= profile(Level::Low).history_pages);
+        assert!([Level::Normal, Level::Low, Level::Lowest].iter().all(|l| profile(*l).history_pages >= 1));
+        assert!([Level::Normal, Level::Low, Level::Lowest].iter().all(|l| (24..=60).contains(&profile(*l).frame_rate)));
+        assert!(profile(Level::Normal).awake_tabs.is_none());
+        assert!(profile(Level::Low).awake_tabs > profile(Level::Lowest).awake_tabs);
+        assert!(profile(Level::Lowest).awake_tabs.is_some_and(|n| n >= 1));
+    }
+
+    #[test]
+    fn finds_the_programs_pteron_started() {
+        // 1 started 2 and 3; 3 started 4; 9 belongs to something else; 5 claims itself as parent.
+        let processes = [(2, 1), (3, 1), (4, 3), (9, 8), (1, 0), (5, 5)];
+        assert_eq!(descendants(1, &processes), vec![2, 3, 4]);
+        assert!(descendants(9, &processes).is_empty());
+        assert!(descendants(5, &processes).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn counts_the_memory_of_a_started_program() {
+        let mut child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        let bytes = helper_bytes();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(bytes > 0);
+    }
+
+    #[test]
+    fn low_memory_is_recognised() {
+        let text = "MemTotal:        8000000 kB\nMemFree:          100000 kB\nMemAvailable:    2048000 kB\n";
+        assert_eq!(parse_meminfo(text), Some((2000, 7812)));
+        assert_eq!(parse_meminfo("MemTotal: 5 kB\n"), None);
+        // 8 GB: short below 800 MB. 2 GB: below 400 MB. 64 GB: below 1 GB.
+        assert!(memory_is_low(700, 8000) && !memory_is_low(900, 8000));
+        assert!(memory_is_low(350, 2000) && !memory_is_low(450, 2000));
+        assert!(memory_is_low(1000, 64000) && !memory_is_low(1100, 64000));
     }
 
     #[test]

@@ -155,6 +155,11 @@ impl App {
         )));
 
         user_content_manager.add_script(Rc::new(UserScript::new(
+            crate::window::SCROLL_SCRIPT.to_string(),
+            None,
+        )));
+
+        user_content_manager.add_script(Rc::new(UserScript::new(
             crate::compat::SCRIPT.to_string(),
             None,
         )));
@@ -202,6 +207,7 @@ impl App {
                 url,
                 title: Some(tab.title).filter(|title| !title.is_empty()),
                 pinned: tab.pinned,
+                scroll: 0,
             });
         }
 
@@ -239,7 +245,8 @@ impl App {
     fn set_idle_control_flow(event_loop: &ActiveEventLoop) {
         let sleep_check = crate::window::tab_sleep_timeout().map(|_| Instant::now() + Duration::from_secs(10));
         let frame = crate::window::next_repaint();
-        match sleep_check.into_iter().chain(frame).chain(crate::compat_host::gtk_wake()).min() {
+        let cleanup = crate::window::next_cleanup();
+        match sleep_check.into_iter().chain(frame).chain(cleanup).chain(crate::compat_host::gtk_wake()).min() {
             Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }

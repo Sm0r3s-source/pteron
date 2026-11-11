@@ -71,6 +71,8 @@ pub struct HeadedWindow {
     inner_size: Cell<PhysicalSize<u32>>,
     fullscreen: Cell<bool>,
     fullscreen_from_document: Cell<bool>,
+    /// Pteron: the window system says the window is completely covered.
+    occluded: Cell<bool>,
     device_pixel_ratio_override: Option<f32>,
     xr_window_poses: RefCell<Vec<Rc<XRWindowPose>>>,
     modifiers_state: Cell<ModifiersState>,
@@ -200,6 +202,7 @@ impl HeadedWindow {
             webview_relative_mouse_point: Cell::new(Point2D::zero()),
             fullscreen: Cell::new(false),
             fullscreen_from_document: Cell::new(false),
+            occluded: Cell::new(false),
             inner_size: Cell::new(inner_size),
             screen_size,
             device_pixel_ratio_override: servoshell_preferences.device_pixel_ratio_override,
@@ -703,6 +706,20 @@ impl HeadedWindow {
 
                 if let WindowEvent::Focused(focused) = event {
                     state.set_window_has_focus(window.clone(), *focused);
+                }
+
+                // Pteron: while the window is minimized or completely covered, slow the visible
+                // page down like a background tab (Windows reports minimizing, X11 and macOS
+                // also report being covered).
+                if let WindowEvent::Occluded(occluded) = event {
+                    self.occluded.set(*occluded);
+                }
+                if matches!(
+                    event,
+                    WindowEvent::Occluded(_) | WindowEvent::Resized(_) | WindowEvent::Focused(_)
+                ) {
+                    let minimized = self.winit_window.is_minimized().unwrap_or(false);
+                    window.set_out_of_sight(self.occluded.get() || minimized);
                 }
 
                 // All CursorMoved events, even when forwarded to the WebView, are also

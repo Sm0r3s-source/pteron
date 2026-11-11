@@ -71,6 +71,8 @@ pub struct Gui {
 
     /// Pteron: Zen-style sidebar instead of the classic top toolbar.
     sidebar_mode: bool,
+    /// Pteron: the large East Asian fonts have been loaded into the interface.
+    wide_fonts: bool,
     sidebar: sidebar::State,
     settings: pteron::Settings,
     settings_page: settings_page::PageState,
@@ -122,7 +124,7 @@ fn truncate_with_ellipsis(input: &str, max_length: usize) -> String {
     target_os = "macos"
 ))]
 fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
-    let mut fonts = FontDefinitions::default();
+    let mut fonts = interface_fonts();
     let mut loaded_font_names = Vec::new();
 
     for (path_str, font_name) in font_candidates.iter() {
@@ -131,9 +133,13 @@ fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
             match fs::read(font_path) {
                 Ok(bytes) => {
                     if !fonts.font_data.contains_key(*font_name) {
+                        // Pteron: these files are 10 to 20 MB each. egui copies font bytes it
+                        // owns, so they would be in memory twice; bytes that live for the whole
+                        // run are shared instead. They are loaded once and never unloaded.
+                        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
                         fonts
                             .font_data
-                            .insert(font_name.to_string(), Arc::new(FontData::from_owned(bytes)));
+                            .insert(font_name.to_string(), Arc::new(FontData::from_static(bytes)));
                         loaded_font_names.push(font_name.to_string());
                         info!("Loaded font: {}", font_name);
                     }
@@ -145,13 +151,55 @@ fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
         }
     }
 
-    if !loaded_font_names.is_empty() {
-        let proportional = fonts.families.get_mut(&FontFamily::Proportional).unwrap();
-        for font_name in loaded_font_names.iter() {
-            proportional.insert(0, font_name.clone());
-        }
-    }
+    // Pteron: fallbacks behind the interface fonts; the last one loaded is tried first.
+    fonts
+        .families
+        .get_mut(&FontFamily::Proportional)
+        .unwrap()
+        .extend(loaded_font_names.into_iter().rev());
 
+    fonts
+}
+
+/// Pteron: the fonts the interface starts with. The East Asian fonts used to draw all of its
+/// text, but they are tens of MB, so they now load only when something on screen needs them
+/// (see `shows_wide_text`). A small system font with the same look takes their place for
+/// everything else, so the interface looks the same before and after they load.
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+fn interface_fonts() -> FontDefinitions {
+    #[cfg(target_os = "windows")]
+    const CANDIDATES: &[&str] = &[r"C:\Windows\Fonts\segoeui.ttf"];
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    const CANDIDATES: &[&str] = &[
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", // Ubuntu/Debian
+        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",   // Fedora
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",          // Arch
+        "/usr/local/share/fonts/noto/NotoSans-Regular.ttf",    // FreeBSD
+    ];
+    #[cfg(target_os = "macos")]
+    const CANDIDATES: &[&str] = &[];
+    static FONT: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+
+    let font = FONT.get_or_init(|| {
+        let bytes = CANDIDATES.iter().find_map(|path| fs::read(path).ok())?;
+        Some(&*Box::leak(bytes.into_boxed_slice()))
+    });
+    let mut fonts = FontDefinitions::default();
+    if let Some(bytes) = font {
+        fonts
+            .font_data
+            .insert("Interface".to_owned(), Arc::new(FontData::from_static(bytes)));
+        fonts
+            .families
+            .get_mut(&FontFamily::Proportional)
+            .unwrap()
+            .insert(0, "Interface".to_owned());
+    }
     fonts
 }
 
@@ -217,6 +265,36 @@ fn configure_fonts() -> FontDefinitions {
     ])
 }
 
+/// Pteron: Chinese, Japanese or Korean text, which egui's built-in fonts cannot draw.
+fn is_wide(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(
+            c as u32,
+            0x1100..=0x11FF | 0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF
+        )
+    })
+}
+
+/// Pteron: is any text drawn in this frame Chinese, Japanese or Korean? Looks at what egui
+/// was asked to draw, so it covers the sidebar, settings, dialogs and messages alike.
+fn shows_wide_text(ctx: &egui::Context) -> bool {
+    fn wide(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Text(text) => is_wide(text.galley.text()),
+            egui::Shape::Vec(shapes) => shapes.iter().any(wide),
+            _ => false,
+        }
+    }
+    let mut layers: Vec<LayerId> = ctx.memory(|memory| memory.layer_ids().collect());
+    layers.push(LayerId::background());
+    ctx.graphics(|graphics| {
+        layers
+            .iter()
+            .filter_map(|layer| graphics.get(*layer))
+            .any(|list| list.all_entries().any(|entry| wide(&entry.shape)))
+    })
+}
+
 impl Drop for Gui {
     fn drop(&mut self) {
         self.rendering_context
@@ -245,8 +323,10 @@ impl Gui {
             false,
         );
 
-        let font_definitions = configure_fonts();
-        context.egui_ctx.set_fonts(font_definitions);
+        // Pteron: the East Asian fonts are large (tens of MB), so they are loaded only once
+        // something on screen needs them (see `shows_wide_text`).
+        context.egui_ctx.set_fonts(interface_fonts());
+        let sidebar_mode = std::env::var("PTERON_UI").map_or(true, |v| v != "classic");
         // Pteron: timed frames wait for their time (see `window::repaint_after`).
         context
             .egui_ctx
@@ -272,7 +352,8 @@ impl Gui {
             rendering_context,
             context,
             toolbar_height: Default::default(),
-            sidebar_mode: std::env::var("PTERON_UI").map_or(true, |v| v != "classic"),
+            sidebar_mode,
+            wide_fonts: false,
             sidebar: Default::default(),
             settings: pteron::settings(),
             settings_page: Default::default(),
@@ -459,6 +540,7 @@ impl Gui {
             favicon_textures,
             sidebar,
             sidebar_mode,
+            wide_fonts,
             settings,
             settings_page,
             last_active_tab,
@@ -1244,6 +1326,12 @@ impl Gui {
             }
             if crate::downloads::any_active() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(300));
+            }
+
+            if !*wide_fonts && shows_wide_text(ctx) {
+                *wide_fonts = true;
+                ctx.set_fonts(configure_fonts());
+                ctx.request_repaint();
             }
 
             window.repaint_webviews();

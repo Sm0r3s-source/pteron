@@ -274,18 +274,6 @@ pub(crate) fn placeholder_html(url: &Url) -> String {
     )
 }
 
-/// Memory of the system engine's helper processes in MB, from `tasklist` CSV lines such as
-/// `"msedgewebview2.exe","1234","Console","1","123,456 K"`.
-pub(crate) fn parse_tasklist_mb(text: &str) -> u64 {
-    text.lines()
-        .filter(|line| line.to_ascii_lowercase().contains("msedgewebview2"))
-        .filter_map(|line| line.rsplit("\",\"").next())
-        .map(|field| field.chars().filter(char::is_ascii_digit).collect::<String>())
-        .filter_map(|digits| digits.parse::<u64>().ok())
-        .sum::<u64>()
-        / 1024
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,12 +412,5 @@ mod tests {
     fn placeholder_is_escaped() {
         let html = placeholder_html(&wrap(&url("https://a.example/?q=<b>\"x\"")).unwrap());
         assert!(!html.contains("<b>") && html.contains("a.example"));
-    }
-
-    #[test]
-    fn adds_up_helper_process_memory() {
-        let text = "\"msedgewebview2.exe\",\"10\",\"Console\",\"1\",\"102,400 K\"\n\"other.exe\",\"11\",\"Console\",\"1\",\"9,999 K\"\n\"msedgewebview2.exe\",\"12\",\"Console\",\"1\",\"51,200 K\"\n";
-        assert_eq!(parse_tasklist_mb(text), 150);
-        assert_eq!(parse_tasklist_mb("INFO: No tasks are running"), 0);
     }
 }

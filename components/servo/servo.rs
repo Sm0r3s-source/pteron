@@ -1107,6 +1107,14 @@ impl Servo {
             .send(EmbedderToConstellationMessage::CreateMemoryReport(snd));
     }
 
+    /// Pteron: run a garbage collection in every script thread. Closed tabs keep their DOM and
+    /// layout memory until the next collection, which an idle browser may not run for a long time.
+    pub fn collect_garbage(&self) {
+        self.0
+            .constellation_proxy
+            .send(EmbedderToConstellationMessage::CollectGarbage);
+    }
+
     pub fn execute_webdriver_command(&self, command: WebDriverCommandMsg) {
         self.0
             .constellation_proxy

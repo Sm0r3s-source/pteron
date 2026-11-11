@@ -38,6 +38,21 @@ wrong or do not work (see [Known problems](#known-problems)).
 **Low memory**
 - Settings, Tabs, **Memory saver**: Normal, Low memory and Lowest memory levels trade speed for
   less RAM (smaller video buffer, earlier tab sleep, fewer helper threads, smaller cache)
+- Closed and sleeping tabs give their memory back: Pteron asks the engine to clean up after a tab goes away, and the
+  engine hands freed memory back to the system instead of keeping it
+- Each tab keeps only its last 2 pages ready for Back (1 with Memory saver); older pages reload when you go back
+- Animations and smooth scrolling run at 60 frames a second (the engine drew 120, which most screens cannot show),
+  30 with Lowest memory
+- While the window is minimized (or completely covered, on Linux), the visible page slows down like a background
+  tab: timers run once a second and animations pause; a page playing sound or video is left alone
+- The in-memory web cache keeps at most 2000 responses (the engine kept 5000, whatever their size)
+- When the computer runs short of memory, background tabs go to sleep early, the longest-unused first; Low memory
+  keeps at most 8 background tabs awake and Lowest memory 4
+- A tab that wakes up goes back to where you had scrolled
+- Pages in background tabs and in a minimized window have their script memory shrunk (caches and compiled code that
+  can be rebuilt are dropped)
+- The fonts for Chinese, Japanese and Korean text in the sidebar (tens of MB) are loaded only when such text appears
+- Settings shows Pteron's memory and, separately, what open compatibility tabs add
 - A memory log is written next to the crash log
 - Typical use on the author's computers: around 100 to 140 MB with a blank tab, more with
   YouTube open. Measure on your own PC; the numbers depend on the machine
@@ -126,7 +141,9 @@ Then, from the folder with an update:
 powershell -ExecutionPolicy Bypass -File .\pteron_updateNN.ps1 -Publish
 ```
 
-`-NoBuild` copies the files without building; `-Publish` builds, packages and publishes a release.
+`-NoBuild` copies the files without building; `-Publish` builds, packages and publishes a release;
+`-Production` builds like the official Servo releases (link-time optimisation, optimised for size), which gives a
+smaller, faster Pteron that uses less memory but takes an hour or more to build and needs about 16 GB of memory.
 The unit tests of Pteron's own modules run on every push (`.github/workflows/pteron-tests.yml`, `pteron_ci/`); a fully
 reproducible Servo build in CI is planned.
 
@@ -153,8 +170,12 @@ New files are in `ports/servoshell/`. Some of the main ones:
 | `memsaver.rs`, `multisearch.rs`, `util.rs`, `locks.rs` | Memory saver, multi-engine search, shared helpers |
 
 Pteron also makes small changes in Servo's own files (`components/config/prefs.rs`,
-`components/net/http_loader.rs`, `components/servo/servo.rs`, the GStreamer media backend, and the
-media controls).
+`components/net/http_loader.rs`, `components/servo/servo.rs`, the GStreamer media backend, the
+media controls, the memory allocator in `components/allocator/`, a "collect garbage" message in
+`components/constellation/` and `components/shared/constellation/`, the animation frame rate in
+`components/paint/refresh_driver.rs`, and the garbage collection of background pages in
+`components/script/event_loop/script_thread.rs`). They are published here under
+the MPL-2.0, like the rest of Servo.
 
 ## Known problems
 

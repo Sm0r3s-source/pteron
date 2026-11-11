@@ -348,7 +348,8 @@ fn radio(
     if let Some(description) = description {
         ui.horizontal(|ui| {
             ui.add_space(26.0);
-            ui.label(RichText::new(description).small().weak());
+            // In a column, so that a long description wraps instead of running off the card.
+            ui.vertical(|ui| ui.label(RichText::new(description).small().weak()));
         });
     }
     ui.add_space(4.0);
@@ -891,18 +892,20 @@ fn memory_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
             "For older or low-memory computers. Pteron uses less memory, but some things get \
              slower: videos buffer less and may pause on a slow connection, background tabs \
              sleep sooner and reload when you come back, and pages may load a little slower. \
-             Changing the level needs a restart of Pteron.",
+             Changing the level needs a restart of Pteron. At every level, background tabs go to \
+             sleep early while the computer is short of memory.",
         ),
         "memory saver low ram reduce usage old slow computer",
         |ui| {
             changed |= radios(ui, &mut settings.memory_mode, &[
-                ("normal", "Normal", Some("Best speed. Nothing is held back.")),
+                ("normal", "Normal", Some("Best speed. Each tab keeps its last 2 pages ready for Back.")),
                 (
                     "low",
                     "Low memory",
                     Some(
                         "Smaller video buffer, background tabs sleep after 3 minutes, memory is handed \
-                         back to Windows when Pteron is in the background, fewer helper threads.",
+                         back to the system when Pteron is in the background, fewer helper threads, \
+                         only the last page kept ready for Back, at most 8 background tabs awake.",
                     ),
                 ),
                 (
@@ -910,13 +913,23 @@ fn memory_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                     "Lowest memory",
                     Some(
                         "Very small video buffer, tabs sleep after 1 minute, one page-layout thread, \
-                         small cache. Pages and videos start noticeably slower.",
+                         small cache, only the last page kept ready for Back, at most 4 background \
+                         tabs awake, animations at 30 frames a second. Pages and videos start \
+                         noticeably slower.",
                     ),
                 ),
             ]);
             if let Some(mb) = crate::memsaver::process_mb() {
                 ui.add_space(6.0);
-                ui.label(format!("Pteron is using about {mb} MB right now."));
+                // The system web engine behind compatibility tabs runs as separate programs.
+                let more = match crate::memsaver::helpers_mb() {
+                    0 => String::new(),
+                    helpers => format!(
+                        " Compatibility tabs (the system web engine) use about {helpers} MB more: {} MB in all.",
+                        mb + helpers
+                    ),
+                };
+                ui.label(format!("Pteron is using about {mb} MB right now.{more}"));
             }
         },
     );
@@ -1344,7 +1357,7 @@ fn about_section(
     card(
         ui,
         pteron::APP_NAME,
-        Some("Rendering engine: Servo (MPL-2.0)"),
+        Some("Rendering engine: modified Servo (MPL-2.0). Source: github.com/Sm0r3s-source/pteron"),
         "about version servo",
         |ui| {
             ui.label(format!("Version 0.{}", updater::BUILD));

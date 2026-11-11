@@ -50,6 +50,14 @@ pub(crate) fn repaint_after(delay: Duration) {
     }
 }
 
+/// Pteron: when the next memory clean-up step is due, so an idle window still wakes up for it.
+static CLEANUP_AT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+pub(crate) fn next_cleanup() -> Option<Instant> {
+    use crate::locks::LockExt;
+    *CLEANUP_AT.lock_ok()
+}
+
 /// True (once) when the wanted frame is due.
 pub(crate) fn take_due_repaint() -> bool {
     use crate::locks::LockExt;
@@ -83,10 +91,10 @@ pub(crate) fn tab_sleep_timeout() -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
-/// Pteron: ask Windows to take back memory that Servo has freed but the heap still holds.
-/// Closing a tab frees memory inside Servo, but the Windows heap keeps it reserved, so
-/// nothing shows up in Task Manager. Compacting the heap and trimming the working set
-/// hands it back. Does nothing on other platforms.
+/// Pteron: ask the system to take back memory that Servo has freed but the heap still holds.
+/// Closing a tab frees memory inside Servo, but the heap keeps it reserved, so nothing shows
+/// up in Task Manager. On Windows, compacting the heap and trimming the working set hands it
+/// back; elsewhere the allocator is told to release its free pages.
 #[cfg(windows)]
 pub(crate) fn trim_process_memory() {
     use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapCompact};
@@ -101,7 +109,18 @@ pub(crate) fn trim_process_memory() {
 }
 
 #[cfg(not(windows))]
-pub(crate) fn trim_process_memory() {}
+pub(crate) fn trim_process_memory() {
+    servo_allocator::release_free_memory();
+}
+
+/// Pteron: runs at the start of every page and reports how far the top-level page is scrolled
+/// (a moment after scrolling stops), so a tab that went to sleep comes back at the same place.
+pub(crate) const SCROLL_SCRIPT: &str = r#"(function(){try{
+if(window!==window.top||window.__pteronScroll)return;window.__pteronScroll=1;var t=0;
+addEventListener('scroll',function(){clearTimeout(t);t=setTimeout(function(){
+console.log('__pteron_scroll__'+Math.round(window.scrollY));},400);},{passive:true});
+}catch(e){}})();"#;
+const SCROLL_PREFIX: &str = "__pteron_scroll__";
 
 /// Pteron: a background tab whose `WebView` has been closed to free memory.
 /// Only its address and title are kept; clicking it creates a fresh `WebView`.
@@ -111,6 +130,8 @@ pub(crate) struct SleepingTab {
     pub(crate) title: Option<String>,
     /// Pteron: pinned tabs are listed first and survive restarts.
     pub(crate) pinned: bool,
+    /// How far down the page was scrolled when it went to sleep, in CSS pixels.
+    pub(crate) scroll: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -155,9 +176,17 @@ pub(crate) struct ServoShellWindow {
     sleeping_tabs: RefCell<Vec<SleepingTab>>,
     /// Pteron: when each background tab was last in the foreground.
     last_active: RefCell<HashMap<WebViewId, Instant>>,
+    /// Pteron: how far each page is scrolled, as reported by `SCROLL_SCRIPT`.
+    scroll: RefCell<HashMap<WebViewId, u32>>,
+    /// Pteron: tabs that just woke up and should scroll back to where they were once loaded.
+    restore_scroll: RefCell<HashMap<WebViewId, u32>>,
     /// Pteron: times at which to hand freed memory back to the OS after tabs went to sleep.
     /// Servo finishes tearing a tab down a little after it is closed, so we trim twice.
     pending_trims: RefCell<Vec<Instant>>,
+    /// Pteron: when the engine should next collect garbage (after tabs closed or slept).
+    pending_gc: Cell<Option<Instant>>,
+    /// Pteron: the window is minimized or completely covered.
+    out_of_sight: Cell<bool>,
     /// Pteron: tabs that are currently playing audio/video. These never sleep.
     media_playing: RefCell<HashSet<WebViewId>>,
     /// Pteron: pinned tabs.
@@ -185,7 +214,11 @@ impl ServoShellWindow {
             pending_commands: Default::default(),
             sleeping_tabs: Default::default(),
             last_active: Default::default(),
+            scroll: Default::default(),
+            restore_scroll: Default::default(),
             pending_trims: Default::default(),
+            pending_gc: Default::default(),
+            out_of_sight: Default::default(),
             media_playing: Default::default(),
             pinned: Default::default(),
             last_session_save: Default::default(),
@@ -347,6 +380,8 @@ impl ServoShellWindow {
             self.last_active
                 .borrow_mut()
                 .insert(previous, Instant::now());
+            // The engine then shrinks the memory of pages that are in the background.
+            self.schedule_memory_cleanup(Duration::from_secs(60));
         }
         self.webview_collection
             .borrow_mut()
@@ -388,11 +423,20 @@ impl ServoShellWindow {
     /// Note: This can happen because we can trigger a close with a UI action and then get
     /// the close notification via the [`WebViewDelegate`] later.
     pub(crate) fn close_webview(&self, webview_id: WebViewId) {
+        self.remove_webview(webview_id, true);
+    }
+
+    /// Pteron: `remember` puts the page on the "reopen closed tab" list; a tab that only goes to
+    /// sleep stays in the sidebar and must not appear there.
+    fn remove_webview(&self, webview_id: WebViewId, remember: bool) {
         let mut webview_collection = self.webview_collection.borrow_mut();
         let Some(closed) = webview_collection.remove(webview_id) else {
             return;
         };
-        if let Some(url) = closed.url().filter(|url| matches!(url.scheme(), "http" | "https")) {
+        drop(webview_collection);
+        if remember &&
+            let Some(url) = closed.url().filter(|url| matches!(url.scheme(), "http" | "https"))
+        {
             let mut list = self.closed_tabs.borrow_mut();
             list.push(url);
             if list.len() > 20 {
@@ -400,13 +444,54 @@ impl ServoShellWindow {
             }
         }
         self.last_active.borrow_mut().remove(&webview_id);
+        self.scroll.borrow_mut().remove(&webview_id);
+        self.restore_scroll.borrow_mut().remove(&webview_id);
         self.media_playing.borrow_mut().remove(&webview_id);
         self.pinned.borrow_mut().remove(&webview_id);
         self.platform_window
             .dismiss_embedder_controls_for_webview(webview_id);
+        self.schedule_memory_cleanup(Duration::from_secs(2));
 
         self.set_needs_update();
         self.set_needs_repaint();
+    }
+
+    /// Pteron: after a tab closes, goes to sleep or leaves pages behind in its history, collect
+    /// garbage in the engine a little later (once the pages are gone) and then hand the freed
+    /// memory back to the system. An earlier clean-up that is still pending is kept.
+    pub(crate) fn schedule_memory_cleanup(&self, delay: Duration) {
+        let at = Instant::now() + delay;
+        if self.pending_gc.get().is_some_and(|pending| pending <= at) {
+            return;
+        }
+        self.pending_gc.set(Some(at));
+        *self.pending_trims.borrow_mut() =
+            [1, 5, 20].map(|secs| at + Duration::from_secs(secs)).to_vec();
+        self.note_next_cleanup();
+    }
+
+    fn note_next_cleanup(&self) {
+        use crate::locks::LockExt;
+        let next = self.pending_trims.borrow().iter().copied().chain(self.pending_gc.get()).min();
+        *CLEANUP_AT.lock_ok() = next;
+    }
+
+    /// Pteron: the window was minimized or covered (or came back). The engine already slows down
+    /// background tabs (timers once a second, no animation frames); while nobody can see the
+    /// window, the visible tab gets the same treatment, unless it is playing sound or video.
+    pub(crate) fn set_out_of_sight(&self, hidden: bool) {
+        if self.out_of_sight.replace(hidden) == hidden {
+            return;
+        }
+        let Some(webview) = self.active_webview() else {
+            return;
+        };
+        if !hidden {
+            webview.show();
+        } else if !self.media_playing.borrow().contains(&webview.id()) {
+            webview.hide();
+            self.schedule_memory_cleanup(Duration::from_secs(30));
+        }
     }
 
     /// Pteron: remember whether a tab is playing media (playing tabs never sleep).
@@ -442,8 +527,35 @@ impl ServoShellWindow {
         if tab.pinned {
             self.pinned.borrow_mut().insert(webview.id());
         }
+        if tab.scroll > 0 {
+            self.restore_scroll.borrow_mut().insert(webview.id(), tab.scroll);
+        }
         self.set_needs_update();
         self.set_needs_repaint();
+    }
+
+    /// Pteron: a console message from `SCROLL_SCRIPT`? Remembers the position and swallows it.
+    pub(crate) fn handle_scroll_message(&self, id: WebViewId, message: &str) -> bool {
+        let Some(position) = message.strip_prefix(SCROLL_PREFIX) else {
+            return false;
+        };
+        if let Ok(position) = position.parse::<u32>() {
+            self.scroll.borrow_mut().insert(id, position);
+        }
+        true
+    }
+
+    /// Pteron: a page started or finished loading. A new page starts at the top; a tab that just
+    /// woke up goes back to where it was (again a moment later, when pictures have made room).
+    pub(crate) fn note_load_status(&self, webview: &WebView, complete: bool) {
+        if !complete {
+            self.scroll.borrow_mut().remove(&webview.id());
+        } else if let Some(y) = self.restore_scroll.borrow_mut().remove(&webview.id()) {
+            webview.evaluate_javascript(
+                format!("scrollTo(0,{y});setTimeout(function(){{if(Math.abs(scrollY-{y})>50)scrollTo(0,{y});}},800);"),
+                |_| {},
+            );
+        }
     }
 
     /// Pteron: is this tab pinned?
@@ -527,14 +639,26 @@ impl ServoShellWindow {
         self.save_session();
         crate::library::flush();
 
-        // Hand freed memory back to the OS once Servo has finished closing slept tabs.
+        // Hand freed memory back to the OS once Servo has finished closing slept or closed tabs.
+        // The first step also runs a garbage collection, so the closed pages' DOM and layout
+        // boxes are freed before the later trims.
         {
             let now = Instant::now();
-            let mut pending = self.pending_trims.borrow_mut();
-            if pending.iter().any(|at| *at <= now) {
+            if self.pending_gc.get().is_some_and(|at| at <= now) {
+                self.pending_gc.set(None);
+                state.servo().collect_garbage();
+            }
+            // (The list must not stay borrowed while `note_next_cleanup` reads it.)
+            let due = {
+                let mut pending = self.pending_trims.borrow_mut();
+                let due = pending.iter().any(|at| *at <= now);
                 pending.retain(|at| *at > now);
+                due
+            };
+            if due {
                 trim_process_memory();
             }
+            self.note_next_cleanup();
         }
 
         // Never leave a window with only sleeping tabs and nothing on screen.
@@ -552,50 +676,56 @@ impl ServoShellWindow {
         let active_id = self.webview_collection.borrow().active_id();
         let now = Instant::now();
 
-        let to_sleep: Vec<WebViewId> = {
+        // Background tabs that may sleep, the longest unused first. Only ordinary web pages are
+        // put to sleep: internal pages (new tab, about:) are cheap and have no address worth
+        // coming back to.
+        let mut idle: Vec<(WebViewId, Duration)> = {
             let last_active = self.last_active.borrow();
             let playing = self.media_playing.borrow();
             self.webviews()
                 .into_iter()
-                .filter(|(id, _)| Some(*id) != active_id)
-                .filter(|(id, _)| !playing.contains(id))
-                .filter(|(id, _)| {
-                    last_active
-                        .get(id)
-                        .is_some_and(|since| now.duration_since(*since) >= timeout)
+                .filter(|(id, _)| Some(*id) != active_id && !playing.contains(id))
+                .filter(|(_, webview)| {
+                    webview.url().is_some_and(|url| matches!(url.scheme(), "http" | "https"))
                 })
-                .map(|(id, _)| id)
+                .filter_map(|(id, _)| Some((id, now.duration_since(*last_active.get(&id)?))))
                 .collect()
         };
+        idle.sort_by_key(|(_, unused)| std::cmp::Reverse(*unused));
+        // Tabs sleep early when the computer is short of memory or more tabs are awake than the
+        // memory saver level allows, but never a tab used in the last half minute.
+        let early = crate::memsaver::tabs_to_sleep_early(idle.len());
+        let to_sleep: Vec<WebViewId> = idle
+            .iter()
+            .enumerate()
+            .filter(|(index, (_, unused))| {
+                *unused >= timeout || (*index < early && *unused >= Duration::from_secs(30))
+            })
+            .map(|(_, (id, _))| *id)
+            .collect();
 
         let mut changed = false;
         for id in to_sleep {
             let Some(webview) = self.webview_by_id(id) else {
                 continue;
             };
-            // Only ordinary web pages are put to sleep. Internal pages (new tab, about:)
-            // are cheap and have no address worth coming back to.
-            let Some(url) = webview.url().filter(|url| matches!(url.scheme(), "http" | "https"))
-            else {
+            let Some(url) = webview.url() else {
                 continue;
             };
             let title = webview.page_title();
             let pinned = self.pinned.borrow().contains(&id);
+            let scroll = self.scroll.borrow().get(&id).copied().unwrap_or(0);
             drop(webview);
             self.sleeping_tabs
                 .borrow_mut()
-                .push(SleepingTab { url, title, pinned });
+                .push(SleepingTab { url, title, pinned, scroll });
             // Removing the last handle to the `WebView` closes it and frees its memory.
-            self.close_webview(id);
+            self.remove_webview(id, false);
             changed = true;
         }
 
         if changed {
-            let now = Instant::now();
-            self.pending_trims.borrow_mut().extend([
-                now + Duration::from_secs(5),
-                now + Duration::from_secs(15),
-            ]);
+            self.schedule_memory_cleanup(Duration::from_secs(2));
             self.set_needs_update();
             self.platform_window.request_repaint(self);
         }

@@ -554,20 +554,3 @@ fn end_engine_processes() {
 #[cfg(not(windows))]
 fn end_engine_processes() {}
 
-/// Memory used by the system engine's helper processes in MB (all programs that use WebView2
-/// are counted), for the memory log. Windows only.
-#[cfg(windows)]
-pub(crate) fn engine_mb() -> Option<u64> {
-    let out = std::process::Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq msedgewebview2.exe", "/FO", "CSV", "/NH"])
-        .creation_flags(0x0800_0000)
-        .output()
-        .ok()?;
-    Some(crate::compat_view::parse_tasklist_mb(&String::from_utf8_lossy(&out.stdout)))
-}
-
-#[cfg(not(windows))]
-pub(crate) fn engine_mb() -> Option<u64> {
-    None
-}
-
