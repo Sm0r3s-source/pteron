@@ -22,6 +22,8 @@ pub(crate) enum Category {
     #[default]
     Search,
     Appearance,
+    Layout,
+    Pages,
     Startup,
     Tabs,
     Video,
@@ -31,9 +33,11 @@ pub(crate) enum Category {
 }
 
 impl Category {
-    const ALL: [Category; 8] = [
+    const ALL: [Category; 10] = [
         Category::Search,
         Category::Appearance,
+        Category::Layout,
+        Category::Pages,
         Category::Startup,
         Category::Tabs,
         Category::Video,
@@ -46,6 +50,8 @@ impl Category {
         match self {
             Category::Search => "Search",
             Category::Appearance => "Appearance",
+            Category::Layout => "Layout & buttons",
+            Category::Pages => "Web pages",
             Category::Startup => "On startup",
             Category::Tabs => "Tabs & memory",
             Category::Video => "Video",
@@ -58,6 +64,8 @@ impl Category {
 
 /// Things the page asks the app to do (the page itself cannot reach the engine).
 pub(crate) enum PageAction {
+    /// Reload every open tab (so page styles apply now).
+    ReloadTabs,
     ClearCookies,
     ClearCache,
     ForgetSession,
@@ -182,7 +190,8 @@ pub(crate) fn show(
                             });
                             let searching = !page.query.trim().is_empty();
 
-                            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            // (Each category keeps its own scroll position.)
+                            ScrollArea::vertical().id_salt(page.category as u8).auto_shrink([false, false]).show(ui, |ui| {
                                 let margin = ((width - CONTENT_WIDTH) / 2.0).max(16.0);
                                 ui.horizontal_top(|ui| {
                                     ui.add_space(margin);
@@ -209,6 +218,12 @@ pub(crate) fn show(
                                                 },
                                                 Category::Appearance => {
                                                     changed |= appearance_section(ui, settings, &mut page.pending, &page.notice)
+                                                },
+                                                Category::Layout => {
+                                                    changed |= layout_section(ui, settings)
+                                                },
+                                                Category::Pages => {
+                                                    changed |= pages_section(ui, settings, &mut page.pending)
                                                 },
                                                 Category::Startup => {
                                                     changed |= startup_section(ui, settings)
@@ -581,19 +596,9 @@ fn appearance_section(
                     changed = true;
                 }
             });
-            if settings.theme == "custom" {
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    let mut rgb = crate::appearance::parse_hex(&settings.custom_bg).unwrap_or([0x1b, 0x1c, 0x1e]);
-                    if ui.color_edit_button_srgb(&mut rgb).changed() {
-                        settings.custom_bg = crate::appearance::to_hex(rgb);
-                        changed = true;
-                    }
-                    ui.label(RichText::new("Background colour. Text and buttons adjust to it.").weak());
-                });
-            }
         },
     );
+    changed |= theme_editor(ui, settings);
     card(
         ui,
         "Accent colour",
@@ -684,17 +689,6 @@ fn appearance_section(
             }
         },
     );
-    card(
-        ui,
-        "Sidebar",
-        Some("Off: the sidebar slides in when you move the mouse to the left edge."),
-        "sidebar tabs always show pin",
-        |ui| {
-            changed |= ui
-                .checkbox(&mut settings.sidebar_pinned, "Always show the sidebar")
-                .changed();
-        },
-    );
     changed
 }
 
@@ -739,9 +733,11 @@ fn startup_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         |ui| {
             changed |= radios(ui, &mut settings.newtab_tiles, &[
                 ("off", "Show nothing", None),
-                ("bookmarks", "Only my bookmarks", Some("Star a page in the sidebar to put it here.")),
-                ("frequent", "My bookmarks and the sites I visit most", None),
+                ("mine", "Only my shortcuts", Some("The ones you add below or with + on the new tab page.")),
+                ("bookmarks", "My shortcuts and bookmarks", Some("Star a page to put it here.")),
+                ("frequent", "My shortcuts, bookmarks and the sites I visit most", None),
             ]);
+            changed |= shortcuts_editor(ui, settings);
         },
     );
     changed
@@ -1408,4 +1404,357 @@ fn about_section(
         },
     );
     reset
+}
+
+// ---------------------------------------------------------------- Pteron: customization
+
+/// Edit every colour of the custom theme, starting from any theme.
+fn theme_editor(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
+    let mut changed = false;
+    card(
+        ui,
+        "Theme editor",
+        Some("Make your own theme: start from any theme, then change each colour."),
+        "theme editor custom colour color background text cards make own palette",
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Start from");
+                let mut start: Option<crate::appearance::Palette> = None;
+                egui::ComboBox::from_id_salt("pteron_theme_start")
+                    .selected_text("Choose a theme")
+                    .show_ui(ui, |ui| {
+                        for (name, palette) in [("Light", crate::appearance::LIGHT_PREVIEW), ("Dark", crate::appearance::DARK_PREVIEW)]
+                            .into_iter()
+                            .chain(crate::appearance::THEMES.iter().map(|(_, name, p)| (*name, *p)))
+                        {
+                            if ui.selectable_label(false, name).clicked() {
+                                start = Some(palette);
+                            }
+                        }
+                    });
+                if let Some(palette) = start {
+                    crate::appearance::start_custom_from(settings, &palette);
+                    changed = true;
+                }
+            });
+            if settings.theme != "custom" {
+                ui.label(RichText::new("Choose a theme to start from (or the Custom tile above) to edit its colours.").small().weak());
+                return;
+            }
+            ui.add_space(6.0);
+            // The colours worked out from the background alone, shown for "Automatic" ones.
+            let auto = crate::appearance::palette_for(&pteron::Settings {
+                theme: "custom".into(),
+                custom_bg: settings.custom_bg.clone(),
+                ..Default::default()
+            });
+            let look = &mut settings.look;
+            let rows: [(&str, &mut String, bool); 4] = [
+                ("Background", &mut settings.custom_bg, false),
+                ("Cards, fields and the toolbar", &mut look.custom_surface, true),
+                ("Text", &mut look.custom_text, true),
+                ("Soft text", &mut look.custom_muted, true),
+            ];
+            for (index, (label, value, can_auto)) in rows.into_iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let fallback = auto.map(|p| [p.bg, p.surface, p.text, p.muted][index]).unwrap_or([0x80, 0x80, 0x80]);
+                    let mut rgb = crate::appearance::parse_hex(value).unwrap_or(fallback);
+                    if ui.color_edit_button_srgb(&mut rgb).changed() {
+                        *value = crate::appearance::to_hex(rgb);
+                        changed = true;
+                    }
+                    ui.label(label);
+                    if can_auto && !value.is_empty() && ui.small_button("Automatic").on_hover_text("Work it out from the background").clicked() {
+                        value.clear();
+                        changed = true;
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                let mut rgb = crate::appearance::accent_rgb(settings);
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    settings.accent_custom = crate::appearance::to_hex(rgb);
+                    settings.accent = "custom".into();
+                    changed = true;
+                }
+                ui.label("Accent");
+            });
+        },
+    );
+    changed
+}
+
+/// A small drawing of a browser layout, for picking one.
+fn layout_tile(ui: &mut egui::Ui, id: &str, name: &str, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(150.0, 112.0), Sense::click());
+    let v = ui.visuals();
+    let text = v.text_color();
+    let accent = {
+        let [r, g, b] = crate::appearance::current_accent();
+        Color32::from_rgb(r, g, b)
+    };
+    let gx = id == "gx";
+    let (back, chrome, page) = if gx {
+        (Color32::from_rgb(14, 11, 19), Color32::from_rgb(27, 21, 33), Color32::from_rgb(40, 34, 48))
+    } else {
+        (text.gamma_multiply(0.16), text.gamma_multiply(0.07), v.extreme_bg_color)
+    };
+    let ink = if gx { Color32::from_rgb(250, 30, 78) } else { text.gamma_multiply(0.45) };
+    let p = ui.painter();
+    let window = Rect::from_min_size(rect.min, vec2(150.0, 88.0));
+    p.rect_filled(window, 8.0, page);
+    let ring = if selected { accent } else if response.hovered() { text.gamma_multiply(0.5) } else { text.gamma_multiply(0.2) };
+    let box_at = |x: f32, y: f32, w: f32, h: f32| Rect::from_min_size(window.min + vec2(x, y), vec2(w, h));
+    match id {
+        "sidebar" => {
+            p.rect_filled(box_at(0.0, 0.0, 44.0, 88.0), egui::CornerRadius { nw: 8, sw: 8, ne: 0, se: 0 }, back);
+            p.rect_filled(box_at(6.0, 8.0, 32.0, 6.0), 3.0, page);
+            for (i, y) in [24.0, 34.0, 44.0, 54.0].iter().enumerate() {
+                p.rect_filled(box_at(6.0, *y, 32.0, 6.0), 3.0, if i == 0 { accent.gamma_multiply(0.7) } else { ink.gamma_multiply(0.6) });
+            }
+        },
+        _ => {
+            let rail = if matches!(id, "opera" | "gx") { 14.0 } else { 0.0 };
+            let (top_x, rail_y) = if gx { (rail, 0.0) } else { (0.0, 32.0) };
+            p.rect_filled(box_at(top_x, 0.0, 150.0 - top_x, 18.0), egui::CornerRadius { nw: if gx { 0 } else { 8 }, ne: 8, sw: 0, se: 0 }, back);
+            p.rect_filled(box_at(top_x, 18.0, 150.0 - top_x, 14.0), 0.0, chrome);
+            for i in 0..3 {
+                let x = top_x + 6.0 + i as f32 * 30.0;
+                let tab = if id == "firefox" { box_at(x, 4.0, 27.0, 11.0) } else { box_at(x, 5.0, 28.0, 13.0) };
+                let corners = if id == "firefox" { egui::CornerRadius::same(4) } else { egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 } };
+                if i == 0 {
+                    p.rect_filled(tab, corners, chrome);
+                    if gx {
+                        p.rect_filled(box_at(x, 16.0, 28.0, 2.0), 0.0, ink);
+                    }
+                } else {
+                    p.rect_filled(box_at(x + 5.0, 9.0, 16.0, 3.0), 1.5, ink.gamma_multiply(0.6));
+                }
+            }
+            let (field_x, field_w) = if id == "firefox" { (top_x + 36.0, 78.0 - top_x / 2.0) } else { (top_x + 24.0, 112.0 - top_x) };
+            let radius = if id == "chrome" { 4 } else { 2 };
+            p.rect_filled(box_at(field_x, 21.0, field_w, 8.0), radius, if gx { page } else { text.gamma_multiply(0.12) });
+            if rail > 0.0 {
+                p.rect_filled(box_at(0.0, rail_y, rail, 88.0 - rail_y), egui::CornerRadius { nw: if gx { 8 } else { 0 }, sw: 8, ne: 0, se: 0 }, back);
+                for i in 0..3 {
+                    p.circle_filled(window.min + vec2(rail / 2.0, rail_y + 10.0 + i as f32 * 12.0), 2.5, ink);
+                }
+            }
+        },
+    }
+    p.rect_stroke(window, 8.0, egui::Stroke::new(if selected { 2.5_f32 } else { 1.0 }, ring), egui::StrokeKind::Inside);
+    p.text(
+        rect.left_bottom() + vec2(4.0, -4.0),
+        Align2::LEFT_BOTTOM,
+        name,
+        FontId::proportional(13.5),
+        if selected { accent } else { text },
+    );
+    response
+}
+
+fn layout_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
+    let mut changed = false;
+    card(
+        ui,
+        "Browser layout",
+        Some(
+            "Make Pteron look like the browser you are used to. Choosing a layout also picks matching \
+             colours and corners; you can change them afterwards.",
+        ),
+        "layout style chrome firefox opera gx gaming tabs top sidebar browser look design",
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
+                for (id, name, _, theme, roundness) in crate::look::LAYOUTS {
+                    if layout_tile(ui, id, name, settings.look.layout == id).clicked() && settings.look.layout != id {
+                        settings.look.layout = id.to_string();
+                        settings.look.roundness = roundness;
+                        if !theme.is_empty() {
+                            settings.theme = theme.to_string();
+                            settings.accent = "auto".to_string();
+                        }
+                        changed = true;
+                    }
+                }
+            });
+            if let Some((.., description, _, _)) = crate::look::LAYOUTS.iter().find(|(id, ..)| *id == settings.look.layout) {
+                ui.add_space(6.0);
+                ui.label(RichText::new(*description).weak());
+            }
+        },
+    );
+    let look = &mut settings.look;
+    if !look.top_tabs() {
+        card(
+            ui,
+            "Sidebar",
+            Some("When it is not always shown, the sidebar slides in when the mouse touches the window edge."),
+            "sidebar tabs always show pin right left side width",
+            |ui| {
+                changed |= ui.checkbox(&mut settings.sidebar_pinned, "Always show the sidebar").changed();
+                changed |= ui.checkbox(&mut look.sidebar_right, "Put the sidebar on the right").changed();
+                changed |= ui.add(egui::Slider::new(&mut look.sidebar_width, 200..=420).text("Width").suffix(" px")).changed();
+            },
+        );
+    }
+    card(
+        ui,
+        "Tabs",
+        None,
+        "tabs icons favicon close button bookmarks bar",
+        |ui| {
+            changed |= ui.checkbox(&mut look.tab_icons, "Show site icons on tabs").changed();
+            changed |= ui.checkbox(&mut look.close_always, "Show a close button on every tab (not only under the mouse)").changed();
+            if look.top_tabs() {
+                changed |= ui.checkbox(&mut look.bookmarks_bar, "Show the bookmarks bar under the toolbar").changed();
+            }
+        },
+    );
+    card(
+        ui,
+        "Buttons",
+        Some("Which buttons are shown next to the address bar."),
+        "toolbar buttons hide show back forward reload home star reader copy new window experimental",
+        |ui| {
+            for (id, name) in crate::look::BUTTONS {
+                let mut shown = look.shows(id);
+                if ui.checkbox(&mut shown, name).changed() {
+                    look.hidden_buttons.retain(|hidden| hidden != id);
+                    if !shown {
+                        look.hidden_buttons.push(id.to_string());
+                    }
+                    changed = true;
+                }
+            }
+        },
+    );
+    card(
+        ui,
+        "Size and shape",
+        Some("How big the interface is, how much room there is between things, and how round the corners are."),
+        "size scale zoom interface bigger smaller density compact roomy spacing corners round square",
+        |ui| {
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .add(egui::Slider::new(&mut look.scale, 75..=175).step_by(5.0).text("Interface size").suffix("%"))
+                    .changed();
+                if look.scale != 100 && ui.small_button("100%").clicked() {
+                    look.scale = 100;
+                    changed = true;
+                }
+            });
+            ui.add_space(6.0);
+            changed |= radios(ui, &mut look.density, &[
+                ("compact", "Compact", Some("More tabs and bookmarks fit.")),
+                ("normal", "Normal", None),
+                ("roomy", "Roomy", Some("Bigger targets, easier on touch screens.")),
+            ]);
+            changed |= ui.add(egui::Slider::new(&mut look.roundness, 0..=16).text("Corner roundness")).changed();
+        },
+    );
+    changed
+}
+
+fn pages_section(ui: &mut egui::Ui, settings: &mut pteron::Settings, pending: &mut Vec<PageAction>) -> bool {
+    let mut changed = false;
+    let look = &mut settings.look;
+    card(
+        ui,
+        "Dark mode for web pages",
+        Some(
+            "Pages that have their own dark look use it. Other light pages are turned dark, while \
+             pictures and videos keep their colours. Turned-dark pages take a little more power to scroll.",
+        ),
+        "dark mode night web pages sites invert black",
+        |ui| {
+            changed |= ui.checkbox(&mut look.dark_pages, "Make web pages dark").changed();
+            if look.dark_pages {
+                ui.add_space(6.0);
+                changed |= site_list(ui, "pteron_dark_skip", "Sites left as they are:", &mut look.dark_skip);
+                ui.label(RichText::new("The half-moon button next to the address bar switches this for the site you are on.").small().weak());
+            }
+        },
+    );
+    card(
+        ui,
+        "Your styles for sites",
+        Some("Your own CSS for a site and its subdomains, or * for every site. Applies when a page loads."),
+        "css style user styles custom site stylesheet",
+        |ui| {
+            let mut remove = None;
+            for (index, style) in look.site_styles.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .add(TextEdit::singleline(&mut style.site).hint_text("example.com or *").desired_width(220.0))
+                        .changed();
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                });
+                changed |= ui
+                    .add(
+                        TextEdit::multiline(&mut style.css)
+                            .code_editor()
+                            .hint_text("body { font-size: 18px; }")
+                            .desired_rows(4)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .changed();
+                ui.add_space(8.0);
+            }
+            if let Some(index) = remove {
+                look.site_styles.remove(index);
+                changed = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Add a site style").clicked() {
+                    look.site_styles.push(crate::look::SiteStyle::default());
+                    changed = true;
+                }
+                if !look.site_styles.is_empty() && ui.button("Apply to open tabs").on_hover_text("Reloads every open tab").clicked() {
+                    pending.push(PageAction::ReloadTabs);
+                }
+            });
+        },
+    );
+    changed
+}
+
+/// The user's own new tab shortcuts: remove, or add one.
+fn shortcuts_editor(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
+    let mut changed = false;
+    ui.add_space(6.0);
+    ui.label("Your shortcuts:");
+    let mut remove = None;
+    for (index, shortcut) in settings.look.shortcuts.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let name = if shortcut.name.is_empty() { shortcut.url.as_str() } else { shortcut.name.as_str() };
+            ui.label(name).on_hover_text(&shortcut.url);
+            if ui.small_button("Remove").clicked() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        settings.look.shortcuts.remove(index);
+        changed = true;
+    }
+    let key = Id::new("pteron_new_shortcut");
+    let (mut name, mut address) = ui.data_mut(|d| d.get_temp::<(String, String)>(key)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.add(TextEdit::singleline(&mut name).hint_text("Name").desired_width(120.0));
+        let field = ui.add(TextEdit::singleline(&mut address).hint_text("example.com").desired_width(200.0));
+        let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+        if (ui.button("Add").clicked() || entered) && settings.look.add_shortcut(&name, &address) {
+            if settings.newtab_tiles == "off" {
+                settings.newtab_tiles = "mine".into();
+            }
+            name.clear();
+            address.clear();
+            changed = true;
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(key, (name, address)));
+    changed
 }

@@ -8,6 +8,7 @@
 //! - servo:experimental-preferences
 //! - servo:config
 //! - servo:newtab
+//! - servo:newtab-edit (Pteron: add or remove a new tab shortcut)
 //! - servo:welcome (Pteron)
 //! - servo:known-issues (Pteron)
 //! - servo:preferences
@@ -54,6 +55,7 @@ impl ProtocolHandler for ServoProtocolHandler {
             ),
             // Pteron: the new-tab page is generated so its search box uses the chosen engine.
             "newtab" => html_response(request, crate::pteron::newtab_html()),
+            "newtab-edit" => html_response(request, crate::pteron::newtab_edit(url.as_url())),
             "welcome" => html_response(request, crate::pteron::welcome_html()),
             "compat" => html_response(request, crate::compat_view::placeholder_html(url.as_url())),
             "known-issues" => html_response(request, crate::pteron::known_issues_html()),

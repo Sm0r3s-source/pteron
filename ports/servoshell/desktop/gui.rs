@@ -56,7 +56,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
 
 use crate::desktop::event_loop::AppEvent;
-use crate::desktop::{headed_window, settings_page, sidebar};
+use crate::desktop::{headed_window, settings_page, sidebar, topbar};
 use crate::library;
 use crate::pteron;
 use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
@@ -74,6 +74,14 @@ pub struct Gui {
     /// Pteron: the large East Asian fonts have been loaded into the interface.
     wide_fonts: bool,
     sidebar: sidebar::State,
+    /// Pteron: the panel open next to the Opera-style side bar.
+    rail: topbar::RailPanel,
+    /// Pteron: where the page is drawn, in egui points (everything else is interface).
+    page_rect: egui::Rect,
+    /// Pteron: egui's zoom for the screen's scale; the interface size setting multiplies it.
+    base_zoom: std::cell::Cell<f32>,
+    /// Pteron: the count of settings changes made outside the settings page that were picked up.
+    settings_seen: u64,
     settings: pteron::Settings,
     settings_page: settings_page::PageState,
     /// The tab that was active last frame; switching tabs closes the settings page.
@@ -172,33 +180,46 @@ fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
     target_os = "macos"
 ))]
 fn interface_fonts() -> FontDefinitions {
+    // The interface font, then a font with symbols (✓, ✕, ▲, ▼...) that it lacks.
     #[cfg(target_os = "windows")]
-    const CANDIDATES: &[&str] = &[r"C:\Windows\Fonts\segoeui.ttf"];
+    const CANDIDATES: [&[&str]; 2] = [&[r"C:\Windows\Fonts\segoeui.ttf"], &[r"C:\Windows\Fonts\seguisym.ttf"]];
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    const CANDIDATES: &[&str] = &[
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", // Ubuntu/Debian
-        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",   // Fedora
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",          // Arch
-        "/usr/local/share/fonts/noto/NotoSans-Regular.ttf",    // FreeBSD
+    const CANDIDATES: [&[&str]; 2] = [
+        &[
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", // Ubuntu/Debian
+            "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",   // Fedora
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",          // Arch
+            "/usr/local/share/fonts/noto/NotoSans-Regular.ttf",    // FreeBSD
+        ],
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
+        ],
     ];
     #[cfg(target_os = "macos")]
-    const CANDIDATES: &[&str] = &[];
-    static FONT: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+    const CANDIDATES: [&[&str]; 2] = [&[], &[]];
+    static FONTS: std::sync::OnceLock<[Option<&'static [u8]>; 2]> = std::sync::OnceLock::new();
 
-    let font = FONT.get_or_init(|| {
-        let bytes = CANDIDATES.iter().find_map(|path| fs::read(path).ok())?;
-        Some(&*Box::leak(bytes.into_boxed_slice()))
+    let loaded = FONTS.get_or_init(|| {
+        CANDIDATES.map(|paths| {
+            let bytes = paths.iter().find_map(|path| fs::read(path).ok())?;
+            Some(&*Box::leak(bytes.into_boxed_slice()))
+        })
     });
     let mut fonts = FontDefinitions::default();
-    if let Some(bytes) = font {
-        fonts
-            .font_data
-            .insert("Interface".to_owned(), Arc::new(FontData::from_static(bytes)));
-        fonts
-            .families
-            .get_mut(&FontFamily::Proportional)
-            .unwrap()
-            .insert(0, "Interface".to_owned());
+    for (index, (name, bytes)) in ["Interface", "Symbols"].into_iter().zip(loaded).enumerate() {
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+        let family = fonts.families.get_mut(&FontFamily::Proportional).unwrap();
+        if index == 0 {
+            family.insert(0, name.to_owned());
+        } else {
+            family.push(name.to_owned());
+        }
     }
     fonts
 }
@@ -355,6 +376,10 @@ impl Gui {
             sidebar_mode,
             wide_fonts: false,
             sidebar: Default::default(),
+            rail: Default::default(),
+            page_rect: egui::Rect::NOTHING,
+            base_zoom: std::cell::Cell::new(1.0),
+            settings_seen: pteron::outside_changes(),
             settings: pteron::settings(),
             settings_page: Default::default(),
             last_active_tab: None,
@@ -408,7 +433,30 @@ impl Gui {
             return true;
         }
         if self.sidebar_mode {
-            return position.x < self.sidebar.hit_width;
+            // `position` is in screen points; the interface size setting scales egui's points.
+            let scale = self.ui_scale();
+            let point = egui::pos2(position.x / scale, position.y / scale);
+            let ctx = &self.context.egui_ctx;
+            // Menus, lists and pop-ups over the page (not the link address shown at the bottom).
+            if ctx
+                .layer_id_at(point)
+                .is_some_and(|layer| layer.order != Order::Background && layer.id != Id::new("tooltip"))
+            {
+                return true;
+            }
+            if !self.page_rect.contains(point) {
+                return true;
+            }
+            // The edge strip that opens the sidebar (a pinned one is beside the page).
+            if self.sidebar.pinned {
+                return false;
+            }
+            let hit = self.sidebar.hit_width;
+            return if self.sidebar.right {
+                point.x >= self.page_rect.max.x - hit
+            } else {
+                point.x < self.page_rect.min.x + hit
+            };
         }
         position.y < self.toolbar_height.get()
     }
@@ -541,6 +589,10 @@ impl Gui {
             sidebar,
             sidebar_mode,
             wide_fonts,
+            rail,
+            page_rect,
+            base_zoom,
+            settings_seen,
             settings,
             settings_page,
             last_active_tab,
@@ -551,6 +603,19 @@ impl Gui {
         let winit_window = headed_window.winit_window();
         context.run(winit_window, |ctx| {
             load_pending_favicons(ctx, window, favicon_textures);
+
+            // Pteron: settings changed elsewhere (the new tab page's shortcuts).
+            let seen = pteron::outside_changes();
+            if seen != *settings_seen {
+                *settings_seen = seen;
+                *settings = pteron::settings();
+            }
+            // Pteron: the interface size.
+            let scale = if *sidebar_mode { settings.look.scale as f32 / 100.0 } else { 1.0 };
+            let zoom = base_zoom.get() * scale;
+            if (ctx.zoom_factor() - zoom).abs() > 0.001 {
+                ctx.set_zoom_factor(zoom);
+            }
 
             // Pteron: sites that switched to the compatibility tab by themselves are remembered.
             let keep = crate::compat_view::take_keep();
@@ -579,10 +644,19 @@ impl Gui {
                     .and_then(|webview| webview.url())
                     .is_some_and(|url| crate::compat_view::target(&url).is_some());
                 sidebar.page_hover = on_compat && crate::compat_host::pointer_in_page();
-                sidebar.page_edge = on_compat && crate::compat_host::pointer_at_edge();
-                sidebar.pinned = settings.sidebar_pinned;
-                sidebar::set_left_inset(if sidebar.pinned { sidebar::WIDTH } else { 0.0 });
-                sidebar::update_visibility(ctx, sidebar);
+                sidebar.page_edge = on_compat && crate::compat_host::pointer_at_edge(settings.look.sidebar_right);
+                let look = settings.look.clone();
+                sidebar.width = look.sidebar_width as f32;
+                sidebar.right = look.sidebar_right;
+                sidebar::set_row_style(look.row_height(), look.close_always);
+                if look.top_tabs() {
+                    sidebar.pinned = false;
+                    sidebar.visible = false;
+                    sidebar.hit_width = 0.0;
+                } else {
+                    sidebar.pinned = settings.sidebar_pinned;
+                    sidebar::update_visibility(ctx, sidebar);
+                }
                 let bookmarks_list = library::bookmarks();
                 // The page in the active tab, if it is an ordinary web page.
                 let current_page: Option<(String, String)> = window
@@ -624,7 +698,10 @@ impl Gui {
                             },
                             active: window.active_webview().map(|active| active.id()) == Some(id),
                             pinned: window.is_pinned(id),
-                            favicon: favicon_textures.get(&id).map(|(_, favicon)| *favicon),
+                            favicon: favicon_textures
+                                .get(&id)
+                                .map(|(_, favicon)| *favicon)
+                                .filter(|_| look.tab_icons),
                         })
                         .collect(),
                     sleeping: window
@@ -674,9 +751,16 @@ impl Gui {
                     } else {
                         Vec::new()
                     },
+                    dark_here: current_page.as_ref().filter(|_| look.dark_pages).and_then(|(url, _)| {
+                        Url::parse(url).ok()?.host_str().map(|host| look.dark_for(host))
+                    }),
                 };
                 let height = ctx.available_rect_before_wrap().height();
-                let actions = sidebar::show(ctx, sidebar, &model, location, location_dirty, height);
+                let actions = if look.top_tabs() {
+                    topbar::show(ctx, sidebar, rail, &model, &look, location, location_dirty)
+                } else {
+                    sidebar::show(ctx, sidebar, &model, &look, location, location_dirty, height)
+                };
                 let ids: Vec<WebViewId> = window.webviews().into_iter().map(|(id, _)| id).collect();
                 for action in actions {
                     // Any tab or navigation action leaves the settings page.
@@ -808,10 +892,29 @@ impl Gui {
                             state.set_experimental_preferences_enabled(enabled);
                             window.queue_user_interface_command(UserInterfaceCommand::ReloadAll);
                         },
+                        sidebar::Action::Home => {
+                            if let Some(webview) = window.active_webview() {
+                                webview.load(Url::parse("servo:newtab").expect("a valid address"));
+                            }
+                        },
+                        sidebar::Action::ToggleDarkSite => {
+                            let host = current_page
+                                .as_ref()
+                                .and_then(|(url, _)| Url::parse(url).ok()?.host_str().map(str::to_string));
+                            if let Some(host) = host {
+                                settings.look.toggle_dark_site(&host);
+                                pteron::update(settings.clone());
+                                state.refresh_page_look();
+                                window.queue_user_interface_command(UserInterfaceCommand::Reload);
+                            }
+                        },
+                        sidebar::Action::ToggleBookmarksBar => {
+                            settings.look.bookmarks_bar = !settings.look.bookmarks_bar;
+                            pteron::update(settings.clone());
+                        },
                     }
                 }
             } else if !headed_window.is_fullscreen_from_document() {
-                sidebar::set_left_inset(0.0);
                 let frame = egui::Frame::default()
                     .fill(ctx.style().visuals.window_fill)
                     .inner_margin(4.0);
@@ -1026,7 +1129,6 @@ impl Gui {
 
                 *toolbar_height = Length::new(outer.response.rect.max.y);
             } else {
-                sidebar::set_left_inset(0.0);
                 *toolbar_height = Length::default();
             }
 
@@ -1038,9 +1140,16 @@ impl Gui {
             }
             // (A pinned sidebar is a panel, so the page area already starts next to it.)
             let page_area = ctx.available_rect_before_wrap();
+            // Pteron: the page starts where the interface ends (in screen points for the window).
+            *page_rect = page_area;
+            *toolbar_height = Length::new(page_area.min.y * scale);
+            sidebar::set_left_inset(page_area.min.x * scale);
+            sidebar::set_ui_scale(scale);
             if settings_page::show(ctx, settings_page, settings, page_area) {
                 apply_theme(ctx, settings);
                 let before = pteron::settings();
+                let page_look = |s: &pteron::Settings| (s.look.dark_pages, s.look.dark_skip.clone(), s.look.site_styles.clone());
+                let page_look_changed = page_look(&before) != page_look(settings);
                 let compat_changed = before.compat != settings.compat;
                 let look_changed = pteron::newtab_look_changed(&before, settings);
                 pteron::update(settings.clone());
@@ -1053,6 +1162,9 @@ impl Gui {
                 if compat_changed {
                     state.apply_compat();
                     window.queue_user_interface_command(UserInterfaceCommand::ReloadAll);
+                }
+                if page_look_changed {
+                    state.refresh_page_look();
                 }
             }
             if let Some(result) = crate::sync::take_chosen() {
@@ -1092,6 +1204,10 @@ impl Gui {
                         let names: Vec<&str> = names.iter().map(String::as_str).collect();
                         manager.clear_site_data(&names, servo::StorageType::all());
                         "Cookies and site data cleared. Reload open pages to log out.".to_string()
+                    },
+                    settings_page::PageAction::ReloadTabs => {
+                        window.queue_user_interface_command(UserInterfaceCommand::ReloadAll);
+                        "Open tabs reloaded.".to_string()
                     },
                     settings_page::PageAction::ClearCache => {
                         state.servo().network_manager().clear_cache();
@@ -1240,14 +1356,15 @@ impl Gui {
                 if on_compat_page {
                     ctx.request_repaint_after(std::time::Duration::from_millis(if sidebar.pinned { 500 } else { 100 }));
                 }
-                let left = if sidebar.pinned {
-                    available_rect.min.x
-                } else if sidebar.visible {
-                    sidebar::WIDTH
-                } else {
-                    0.0
-                };
-                let area = egui::Rect::from_min_max(pos2(available_rect.min.x.max(left), available_rect.min.y), available_rect.max);
+                // A sidebar floating over the page leaves the rest of it to the view.
+                let mut area = available_rect;
+                if sidebar.visible && !sidebar.pinned {
+                    if sidebar.right {
+                        area.max.x = area.max.x.min(ctx.content_rect().max.x - sidebar.width);
+                    } else {
+                        area.min.x = area.min.x.max(sidebar.width);
+                    }
+                }
                 compat_host.sync(winit_window, &live, current, free.then_some(area), ctx.pixels_per_point(), ctx.wants_keyboard_input());
                 crate::compat_host::note_alive(compat_host.alive());
                 // The system engine passed a browser check: Servo carries on with the pass.
@@ -1761,7 +1878,13 @@ impl Gui {
     }
 
     pub(crate) fn set_zoom_factor(&self, factor: f32) {
-        self.context.egui_ctx.set_zoom_factor(factor);
+        self.base_zoom.set(factor);
+        self.context.egui_ctx.set_zoom_factor(factor * self.ui_scale());
+    }
+
+    /// Pteron: the interface size setting (1.0 = 100%).
+    fn ui_scale(&self) -> f32 {
+        if self.sidebar_mode { self.settings.look.scale as f32 / 100.0 } else { 1.0 }
     }
 
     pub(crate) fn notify_accessibility_tree_update(&mut self, tree_update: accesskit::TreeUpdate) {
@@ -1867,7 +1990,7 @@ fn apply_theme(ctx: &egui::Context, settings: &pteron::Settings) {
     if let Some(p) = &palette {
         let theme = if p.dark { egui::Theme::Dark } else { egui::Theme::Light };
         ctx.set_visuals_of(theme, visuals_for(p));
-        crate::appearance::polish_style(ctx);
+        crate::appearance::polish_style(ctx, &settings.look);
         return;
     }
     // Plain looks keep their own colours; the chosen accent tints selections and links.
@@ -1880,7 +2003,7 @@ fn apply_theme(ctx: &egui::Context, settings: &pteron::Settings) {
         style.visuals.text_cursor.stroke.color = accent;
         style.visuals.widgets.hovered.bg_stroke.color = accent.gamma_multiply(0.7);
     });
-    crate::appearance::polish_style(ctx);
+    crate::appearance::polish_style(ctx, &settings.look);
 }
 
 fn load_pending_favicons(

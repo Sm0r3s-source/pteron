@@ -325,8 +325,26 @@ impl ServoShellWindow {
         self.platform_window.clone()
     }
 
+    /// Pteron: the colour scheme pages are told the user prefers: dark while dark mode for pages
+    /// is on (except on the sites it leaves alone), otherwise the system's.
+    pub(crate) fn page_theme(&self, url: Option<&Url>) -> servo::Theme {
+        let look = crate::pteron::settings().look;
+        if url.and_then(|url| url.host_str()).is_some_and(|host| look.dark_for(host)) {
+            servo::Theme::Dark
+        } else {
+            self.platform_window.theme()
+        }
+    }
+
+    /// Pteron: tell every page the colour scheme it should use now.
+    pub(crate) fn refresh_page_themes(&self) {
+        for (_, webview) in self.webviews() {
+            webview.notify_theme_change(self.page_theme(webview.url().as_ref()));
+        }
+    }
+
     pub(crate) fn add_webview(&self, webview: WebView) {
-        webview.notify_theme_change(self.platform_window.theme());
+        webview.notify_theme_change(self.page_theme(webview.url().as_ref()));
         self.last_active
             .borrow_mut()
             .insert(webview.id(), Instant::now());

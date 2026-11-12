@@ -695,6 +695,7 @@ dependencies = [
  "log",
  "mp3lame-encoder",
  "ring",
+ "serde",
  "serde_json",
  "symphonia",
  "url",

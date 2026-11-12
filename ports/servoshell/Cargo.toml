@@ -78,6 +78,8 @@ webgpu = ["servo/webgpu"]
 webxr = ["servo/webxr"]
 
 [dependencies]
+# Pteron: settings of the browser look (`look.rs`).
+serde = { workspace = true, features = ["derive"] }
 # Pteron: pure Rust AAC decoder + LAME encoder (MP3 converter), full filter list ad blocker,
 # update signatures (ring is already part of Servo's lockfile).
 adblock = { version = "0.12", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }

@@ -20,10 +20,10 @@ const FILE_NAME: &str = "Pteron-sync.json";
 const SLACK: u64 = 1;
 
 /// The settings that travel between computers (not hardware, paths or first-run flags).
-const SYNCED: [&str; 15] = [
+const SYNCED: [&str; 16] = [
     "engine", "searxng_url", "theme", "custom_bg", "accent", "accent_custom", "newtab_bg", "newtab_color",
     "newtab_tiles", "tab_sleep_minutes", "sidebar_pinned", "startup", "homepage_url", "youtube_player",
-    "fast_start",
+    "fast_start", "look",
 ];
 
 #[derive(Debug, PartialEq)]
@@ -115,6 +115,7 @@ pub(crate) fn synced_settings(settings: &crate::pteron::Settings) -> serde_json:
         "homepage_url": settings.homepage_url,
         "youtube_player": settings.youtube_player,
         "fast_start": settings.fast_start,
+        "look": settings.look,
     });
     let mut kept = serde_json::Map::new();
     for key in SYNCED {

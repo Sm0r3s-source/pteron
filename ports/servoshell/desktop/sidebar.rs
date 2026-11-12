@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! Pteron: a Zen-style vertical sidebar. It floats over the page (the page is never
-//! shifted or resized) and slides in when the pointer touches the left window edge.
+//! shifted or resized) and slides in when the pointer touches the window edge (left or right).
 //! This module only knows about egui; `gui.rs` turns the returned [`Action`]s into
 //! servoshell commands.
 
@@ -14,12 +14,27 @@ use egui::{
     RichText, ScrollArea, Sense, Shape, Stroke, TextEdit, pos2, vec2,
 };
 
-/// Width of the open sidebar, in egui points.
-pub(crate) const WIDTH: f32 = 260.0;
 /// Width of the invisible strip at the left edge that opens the sidebar.
 pub(crate) const HOT_ZONE: f32 = 4.0;
-const LOCATION_ID: &str = "location_input";
-const ROW_HEIGHT: f32 = 28.0;
+pub(crate) const LOCATION_ID: &str = "location_input";
+
+thread_local! {
+    /// Height of a tab or bookmark row (from the interface density setting), and whether every
+    /// tab shows its close button.
+    static ROW: std::cell::Cell<(f32, bool)> = const { std::cell::Cell::new((28.0, false)) };
+}
+
+pub(crate) fn row_height() -> f32 {
+    ROW.with(|row| row.get().0)
+}
+
+pub(crate) fn close_always() -> bool {
+    ROW.with(|row| row.get().1)
+}
+
+pub(crate) fn set_row_style(height: f32, close_always: bool) {
+    ROW.with(|row| row.set((height, close_always)));
+}
 
 /// One live tab, as shown in the list.
 pub(crate) struct TabRow {
@@ -70,6 +85,8 @@ pub(crate) struct Model {
     pub can_bookmark: bool,
     /// Pages matching what is being typed in the address bar.
     pub suggestions: Vec<crate::library::Suggestion>,
+    /// With dark mode for pages on and a web page showing: whether it is dark here.
+    pub dark_here: Option<bool>,
 }
 
 /// What the user did in the sidebar this frame.
@@ -103,6 +120,12 @@ pub(crate) enum Action {
     MoveBookmarkTo { from: usize, to: usize },
     SetExperimental(bool),
     ToggleSettings,
+    /// Go to the new tab page.
+    Home,
+    /// Switch dark mode off (or back on) for the site in the active tab.
+    ToggleDarkSite,
+    /// Show or hide the bookmarks bar (top-tab layouts).
+    ToggleBookmarksBar,
 }
 
 #[derive(Default)]
@@ -120,8 +143,11 @@ pub(crate) struct State {
     pub hit_width: f32,
     /// The mouse is over a compatibility tab's page (a native view that egui cannot see).
     pub page_hover: bool,
-    /// The mouse is at the left edge of a compatibility tab's page.
+    /// The mouse is at the sidebar's edge of a compatibility tab's page.
     pub page_edge: bool,
+    /// Width of the sidebar and the side it is on (from the settings).
+    pub width: f32,
+    pub right: bool,
 }
 
 /// Whether `text` contains every word of `filter` (ignoring case). An empty filter matches all.
@@ -134,11 +160,14 @@ pub(crate) fn filter_matches(filter: &str, text: &str) -> bool {
 pub(crate) fn update_visibility(ctx: &Context, state: &mut State) {
     let pointer_x = ctx.pointer_latest_pos().map(|pos| pos.x);
     let location_focused = ctx.memory(|memory| memory.has_focus(Id::new(LOCATION_ID)));
-    let reach = if state.visible { WIDTH + 6.0 } else { HOT_ZONE };
+    let reach = if state.visible { state.width + 6.0 } else { HOT_ZONE };
+    let right_edge = ctx.content_rect().max.x;
     let near = if state.page_edge {
         true
     } else if state.page_hover {
         false
+    } else if state.right {
+        pointer_x.is_some_and(|x| x >= right_edge - reach)
     } else {
         pointer_x.is_some_and(|x| x <= reach)
     };
@@ -147,7 +176,7 @@ pub(crate) fn update_visibility(ctx: &Context, state: &mut State) {
         ctx.request_repaint();
     }
     state.visible = visible;
-    state.hit_width = if visible { WIDTH } else { HOT_ZONE };
+    state.hit_width = if visible { state.width } else { HOT_ZONE };
 }
 
 /// Width (in egui points) that a pinned sidebar takes from the left of the page. Read by the
@@ -162,25 +191,37 @@ pub(crate) fn left_inset() -> f32 {
     f32::from_bits(LEFT_INSET_BITS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// The interface size setting (1.0 = 100%): egui's points are this many screen points. Read by
+/// the pop-ups of pages (lists, menus), whose positions come in screen points.
+static UI_SCALE_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+
+pub(crate) fn set_ui_scale(scale: f32) {
+    UI_SCALE_BITS.store(scale.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn ui_scale() -> f32 {
+    f32::from_bits(UI_SCALE_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Is the address bar being edited right now?
 pub(crate) fn location_focused(ctx: &Context) -> bool {
     ctx.memory(|memory| memory.has_focus(Id::new(LOCATION_ID)))
 }
 
 /// The accent colour of the chosen colour theme.
-fn accent_color() -> Color32 {
+pub(crate) fn accent_color() -> Color32 {
     let [r, g, b] = crate::appearance::current_accent();
     Color32::from_rgb(r, g, b)
 }
 
 /// `base` with a little of `tint` mixed in (`amount` 0.0 to 1.0).
-fn tinted(base: Color32, tint: Color32, amount: f32) -> Color32 {
+pub(crate) fn tinted(base: Color32, tint: Color32, amount: f32) -> Color32 {
     let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * amount).round() as u8;
     Color32::from_rgb(mix(base.r(), tint.r()), mix(base.g(), tint.g()), mix(base.b(), tint.b()))
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Glyph {
+pub(crate) enum Glyph {
     Previous,
     Next,
     Play,
@@ -188,7 +229,7 @@ enum Glyph {
 }
 
 /// A round media button with its symbol drawn by the painter. `main` is the big filled one.
-fn media_button(ui: &mut egui::Ui, glyph: Glyph, main: bool, accent: Color32) -> egui::Response {
+pub(crate) fn media_button(ui: &mut egui::Ui, glyph: Glyph, main: bool, accent: Color32) -> egui::Response {
     let size = if main { 34.0 } else { 28.0 };
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     let painter = ui.painter();
@@ -252,7 +293,7 @@ fn media_button(ui: &mut egui::Ui, glyph: Glyph, main: bool, accent: Color32) ->
 }
 
 /// Three little bars, like a sound level meter.
-fn equalizer_icon(ui: &mut egui::Ui, accent: Color32, playing: bool) {
+pub(crate) fn equalizer_icon(ui: &mut egui::Ui, accent: Color32, playing: bool) {
     let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
     let heights: [f32; 3] = if playing { [9.0, 14.0, 7.0] } else { [5.0, 5.0, 5.0] };
     for (i, h) in heights.iter().enumerate() {
@@ -266,7 +307,7 @@ fn equalizer_icon(ui: &mut egui::Ui, accent: Color32, playing: bool) {
 }
 
 /// A star (outlined, or filled when the page is bookmarked), drawn with the painter.
-fn star_button(ui: &mut egui::Ui, filled: bool, enabled: bool) -> egui::Response {
+pub(crate) fn star_button(ui: &mut egui::Ui, filled: bool, enabled: bool) -> egui::Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), sense);
     if enabled && response.hovered() {
@@ -299,12 +340,12 @@ fn star_button(ui: &mut egui::Ui, filled: bool, enabled: bool) -> egui::Response
     response
 }
 
-fn icon_button(text: &str) -> Button<'_> {
+pub(crate) fn icon_button(text: &str) -> Button<'_> {
     Button::new(text).frame(false).min_size(vec2(26.0, 26.0))
 }
 
 /// A cog with triangular teeth, drawn with the painter (no font glyph needed).
-fn cog_button(ui: &mut egui::Ui) -> egui::Response {
+pub(crate) fn cog_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     if response.hovered() {
         ui.painter()
@@ -341,6 +382,7 @@ pub(crate) fn show(
     ui: &mut egui::Ui,
     state: &mut State,
     model: &Model,
+    look: &crate::look::Look,
     location: &mut String,
     location_dirty: &mut bool,
     height: f32,
@@ -360,12 +402,17 @@ pub(crate) fn show(
         });
     }
     if state.pinned {
-        egui::Panel::left("pteron_sidebar_panel")
+        let panel = if state.right {
+            egui::Panel::right("pteron_sidebar_panel")
+        } else {
+            egui::Panel::left("pteron_sidebar_panel")
+        };
+        panel
             .resizable(false)
-            .exact_size(WIDTH)
+            .exact_size(state.width)
             .frame(Frame::NONE)
             .show_inside(ui, |ui| {
-                framed(ui, state, model, location, location_dirty, height, &mut actions);
+                framed(ui, state, model, look, location, location_dirty, height, &mut actions);
             });
         return actions;
     }
@@ -373,19 +420,22 @@ pub(crate) fn show(
         return actions;
     }
     let ctx = ui.ctx().clone();
+    let x = if state.right { ctx.content_rect().max.x - state.width } else { 0.0 };
     Area::new(Id::new("pteron_sidebar"))
         .order(Order::Foreground)
-        .fixed_pos(pos2(0.0, 0.0))
+        .fixed_pos(pos2(x, 0.0))
         .show(&ctx, |ui| {
-            framed(ui, state, model, location, location_dirty, height, &mut actions);
+            framed(ui, state, model, look, location, location_dirty, height, &mut actions);
         });
     actions
 }
 
+#[allow(clippy::too_many_arguments)]
 fn framed(
     ui: &mut egui::Ui,
     state: &mut State,
     model: &Model,
+    look: &crate::look::Look,
     location: &mut String,
     location_dirty: &mut bool,
     height: f32,
@@ -399,104 +449,19 @@ fn framed(
                 .stroke(ui.visuals().window_stroke)
                 .inner_margin(margin)
                 .show(ui, |ui| {
-                    ui.set_width(WIDTH - 2.0 * margin);
+                    ui.set_width(state.width - 2.0 * margin);
                     ui.set_min_height(height - 2.0 * margin);
                     let inner_width = ui.available_width();
 
                     // Navigation buttons.
                     ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(model.can_go_back, icon_button("⏴"))
-                            .on_hover_text("Back")
-                            .clicked()
-                        {
-                            *location_dirty = false;
-                            actions.push(Action::Back);
-                        }
-                        if ui
-                            .add_enabled(model.can_go_forward, icon_button("⏵"))
-                            .on_hover_text("Forward")
-                            .clicked()
-                        {
-                            *location_dirty = false;
-                            actions.push(Action::Forward);
-                        }
-                        if !model.loading &&
-                            ui.add(icon_button("↻")).on_hover_text("Reload").clicked()
-                        {
-                            *location_dirty = false;
-                            actions.push(Action::Reload);
-                        }
-                        if model.loading {
-                            ui.add_enabled(false, icon_button("…"));
-                        }
-                        if star_button(ui, model.bookmarked, model.can_bookmark)
-                            .on_hover_text(if model.bookmarked {
-                                "Remove bookmark"
-                            } else {
-                                "Bookmark this page"
-                            })
-                            .clicked()
-                        {
-                            actions.push(Action::ToggleBookmark);
-                        }
-                        if ui
-                            .add_enabled(model.can_bookmark, icon_button("Aa"))
-                            .on_hover_text("Reading mode: clean text and pictures only")
-                            .clicked()
-                        {
-                            actions.push(Action::ReaderMode);
-                        }
+                        nav_buttons(ui, model, look, location_dirty, actions);
+                        page_buttons(ui, model, look, actions);
                     });
                     ui.add_space(4.0);
 
                     // Address bar: a lock (or warning) at the left, a copy-link button at the right.
-                    let location_id = Id::new(LOCATION_ID);
-                    let field = ui
-                        .horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            let mut width = inner_width - 32.0;
-                            match model.security {
-                                Security::Secure => {
-                                    ui.label(RichText::new("\u{1F512}").size(13.0).color(Color32::from_rgb(70, 160, 90)))
-                                        .on_hover_text("Secure connection (https)");
-                                    width -= 22.0;
-                                },
-                                Security::NotSecure => {
-                                    ui.label(RichText::new("\u{26A0}").size(14.0).color(Color32::from_rgb(220, 150, 40)))
-                                        .on_hover_text("Not secure (http)");
-                                    width -= 22.0;
-                                },
-                                Security::None => {},
-                            }
-                            let field = ui.add_sized(
-                                [width, 28.0],
-                                TextEdit::singleline(location)
-                                    .id(location_id)
-                                    .hint_text("Search or enter address"),
-                            );
-                            let copied_id = Id::new("pteron_link_copied");
-                            let now = ui.input(|input| input.time);
-                            let copied_at: Option<f64> = ui.memory(|m| m.data.get_temp(copied_id));
-                            let recently = copied_at.is_some_and(|t| now - t < 1.3);
-                            let label = if recently { "\u{2713}" } else { "\u{29C9}" };
-                            if ui
-                                .add_sized([24.0, 28.0], Button::new(RichText::new(label).size(14.0)).frame(false))
-                                .on_hover_text("Copy link")
-                                .clicked()
-                            {
-                                ui.ctx().copy_text(location.clone());
-                                ui.memory_mut(|m| m.data.insert_temp(copied_id, now));
-                            }
-                            if recently {
-                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(400));
-                            }
-                            field
-                        })
-                        .inner;
-                    if field.changed() {
-                        *location_dirty = true;
-                    }
+                    address_bar(ui, state, model, look, location, location_dirty, inner_width, 28.0, actions);
                     if model.security == Security::NotSecure {
                         ui.label(
                             RichText::new("Not secure (http) - do not enter passwords")
@@ -504,90 +469,16 @@ fn framed(
                                 .color(Color32::from_rgb(220, 150, 40)),
                         );
                     }
-                    if field.has_focus() && *location_dirty && !model.suggestions.is_empty() {
-                        suggestion_popup(
-                            ui.ctx(),
-                            field.rect,
-                            &model.suggestions,
-                            location_dirty,
-                            actions,
-                        );
-                    }
-                    let shortcut = ui.input_mut(|input| {
-                        input.consume_key(Modifiers::COMMAND, Key::L) ||
-                            (!cfg!(target_os = "macos") &&
-                                input.consume_key(Modifiers::ALT, Key::D))
-                    });
-                    if shortcut || state.focus_location {
-                        field.request_focus();
-                        state.focus_location = false;
-                    }
-                    if field.gained_focus() &&
-                        let Some(mut edit) = TextEditState::load(ui.ctx(), location_id)
-                    {
-                        edit.cursor.set_char_range(Some(CCursorRange::two(
-                            CCursor::new(0),
-                            CCursor::new(location.len()),
-                        )));
-                        edit.store(ui.ctx(), location_id);
-                    }
-                    if field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
-                        actions.push(Action::Go(location.clone()));
-                    }
                     ui.add_space(6.0);
 
                     if ui
-                        .add_sized([inner_width, ROW_HEIGHT], Button::new("+  New tab"))
+                        .add_sized([inner_width, row_height()], Button::new("+  New tab"))
                         .clicked()
                     {
                         actions.push(Action::NewTab);
                     }
                     // Pteron: what Plume Music is playing, with simple controls.
-                    if let Some(now) = crate::music::now_playing() {
-                        let accent = accent_color();
-                        ui.add_space(8.0);
-                        Frame::new()
-                            .fill(tinted(ui.visuals().window_fill, accent, 0.12))
-                            .stroke(Stroke::new(1.0_f32, accent.gamma_multiply(0.35)))
-                            .corner_radius(12.0)
-                            .inner_margin(10.0)
-                            .show(ui, |ui| {
-                                ui.set_width(inner_width - 22.0);
-                                ui.horizontal(|ui| {
-                                    equalizer_icon(ui, accent, now.playing);
-                                    ui.add(
-                                        egui::Label::new(RichText::new(&now.title).strong().size(13.0))
-                                            .truncate(),
-                                    );
-                                });
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
-                                    // Centre the three buttons.
-                                    let used = 28.0 + 34.0 + 28.0 + 2.0 * ui.spacing().item_spacing.x * 1.0;
-                                    ui.add_space(((ui.available_width() - used) / 2.0).max(0.0));
-                                    if media_button(ui, Glyph::Previous, false, accent)
-                                        .on_hover_text("Previous song")
-                                        .clicked()
-                                    {
-                                        crate::music::send_command("prev");
-                                    }
-                                    let glyph = if now.playing { Glyph::Pause } else { Glyph::Play };
-                                    if media_button(ui, glyph, true, accent)
-                                        .on_hover_text(if now.playing { "Pause" } else { "Play" })
-                                        .clicked()
-                                    {
-                                        crate::music::send_command("toggle");
-                                    }
-                                    if media_button(ui, Glyph::Next, false, accent)
-                                        .on_hover_text("Next song")
-                                        .clicked()
-                                    {
-                                        crate::music::send_command("next");
-                                    }
-                                });
-                            });
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(1000));
-                    }
+                    music_card(ui, inner_width);
                     ui.add_space(6.0);
                     let total = model.tabs.len() + model.sleeping.len() + model.bookmarks.len();
                     if total >= 6 || !state.filter.is_empty() {
@@ -639,57 +530,14 @@ fn framed(
                                 }
                             }
                             downloads_section(ui);
-                            let shown = model
-                                .bookmarks
-                                .iter()
-                                .filter(|b| filter_matches(&filter, &format!("{} {}", b.label, b.url)))
-                                .count();
-                            if !model.bookmarks.is_empty() && shown > 0 {
-                                ui.add_space(6.0);
-                                ui.separator();
-                                ui.label(RichText::new("Bookmarks").small().weak());
-                                let mut folders: Vec<&str> = model
-                                    .bookmarks
-                                    .iter()
-                                    .filter(|b| !b.folder.is_empty())
-                                    .map(|b| b.folder.as_str())
-                                    .collect();
-                                folders.sort_by_key(|name| name.to_lowercase());
-                                folders.dedup();
-                                if filter.is_empty() {
-                                    for (index, bookmark) in model.bookmarks.iter().enumerate() {
-                                        if bookmark.folder.is_empty() {
-                                            bookmark_row(ui, index, bookmark, &folders, true, actions);
-                                        }
-                                    }
-                                    for name in &folders {
-                                        egui::CollapsingHeader::new(RichText::new(*name).size(13.0))
-                                            .id_salt(("pteron_bookmark_folder", *name))
-                                            .default_open(false)
-                                            .show(ui, |ui| {
-                                                for (index, bookmark) in model.bookmarks.iter().enumerate() {
-                                                    if bookmark.folder == *name {
-                                                        bookmark_row(ui, index, bookmark, &folders, true, actions);
-                                                    }
-                                                }
-                                            });
-                                    }
-                                } else {
-                                    // While filtering, matching bookmarks are listed flat.
-                                    for (index, bookmark) in model.bookmarks.iter().enumerate() {
-                                        if filter_matches(&filter, &format!("{} {}", bookmark.label, bookmark.url)) {
-                                            bookmark_row(ui, index, bookmark, &folders, false, actions);
-                                        }
-                                    }
-                                }
-                            }
+                            bookmark_list(ui, model, &filter, actions);
                         });
 
                     ui.add_space(6.0);
                     ui.separator();
                     ui.horizontal(|ui| {
                         let mut experimental = model.experimental;
-                        if ui
+                        if look.shows("experimental") && ui
                             .add_sized(
                                 [26.0, 26.0],
                                 Button::new(RichText::new("☢").size(16.0))
@@ -703,7 +551,7 @@ fn framed(
                             *location_dirty = false;
                             actions.push(Action::SetExperimental(experimental));
                         }
-                        if ui
+                        if look.shows("newwindow") && ui
                             .add_sized([26.0, 26.0], Button::new(RichText::new("⊞").size(16.0)).frame(false))
                             .on_hover_text("New window")
                             .clicked()
@@ -719,8 +567,261 @@ fn framed(
     }
 }
 
+/// The address bar: a lock (or warning) at the left, the field, a copy-link button at the right;
+/// suggestions while typing, Ctrl+L to focus, Enter to go. Shared by the sidebar and the toolbar.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn address_bar(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    model: &Model,
+    look: &crate::look::Look,
+    location: &mut String,
+    location_dirty: &mut bool,
+    inner_width: f32,
+    height: f32,
+    actions: &mut Vec<Action>,
+) -> egui::Response {
+    let location_id = Id::new(LOCATION_ID);
+    let field = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let copy = look.shows("copy");
+            let mut width = inner_width - if copy { 32.0 } else { 4.0 };
+            match model.security {
+                Security::Secure => {
+                    ui.label(RichText::new("\u{1F512}").size(13.0).color(Color32::from_rgb(70, 160, 90)))
+                        .on_hover_text("Secure connection (https)");
+                    width -= 22.0;
+                },
+                Security::NotSecure => {
+                    ui.label(RichText::new("\u{26A0}").size(14.0).color(Color32::from_rgb(220, 150, 40)))
+                        .on_hover_text("Not secure (http)");
+                    width -= 22.0;
+                },
+                Security::None => {},
+            }
+            let field = ui.add_sized(
+                [width, height],
+                TextEdit::singleline(location)
+                    .id(location_id)
+                    .vertical_align(egui::Align::Center)
+                    .hint_text("Search or enter address"),
+            );
+            let copied_id = Id::new("pteron_link_copied");
+            let now = ui.input(|input| input.time);
+            let copied_at: Option<f64> = ui.memory(|m| m.data.get_temp(copied_id));
+            let recently = copied_at.is_some_and(|t| now - t < 1.3);
+            let label = if recently { "\u{2713}" } else { "\u{1F5D0}" };
+            if copy && ui
+                .add_sized([24.0, height], Button::new(RichText::new(label).size(14.0)).frame(false))
+                .on_hover_text("Copy link")
+                .clicked()
+            {
+                ui.ctx().copy_text(location.clone());
+                ui.memory_mut(|m| m.data.insert_temp(copied_id, now));
+            }
+            if recently {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(400));
+            }
+            field
+        })
+        .inner;
+    if field.changed() {
+        *location_dirty = true;
+    }
+    if field.has_focus() && *location_dirty && !model.suggestions.is_empty() {
+        suggestion_popup(
+            ui.ctx(),
+            field.rect,
+            &model.suggestions,
+            location_dirty,
+            actions,
+        );
+    }
+    let shortcut = ui.input_mut(|input| {
+        input.consume_key(Modifiers::COMMAND, Key::L) ||
+            (!cfg!(target_os = "macos") &&
+                input.consume_key(Modifiers::ALT, Key::D))
+    });
+    if shortcut || state.focus_location {
+        field.request_focus();
+        state.focus_location = false;
+    }
+    if field.gained_focus() &&
+        let Some(mut edit) = TextEditState::load(ui.ctx(), location_id)
+    {
+        edit.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(0),
+            CCursor::new(location.len()),
+        )));
+        edit.store(ui.ctx(), location_id);
+    }
+    if field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
+        actions.push(Action::Go(location.clone()));
+    }
+    field
+}
+
+/// Back, forward, reload and home, as the settings ask. Shared by the sidebar and the toolbar.
+pub(crate) fn nav_buttons(
+    ui: &mut egui::Ui,
+    model: &Model,
+    look: &crate::look::Look,
+    location_dirty: &mut bool,
+    actions: &mut Vec<Action>,
+) {
+    if look.shows("back") &&
+        ui.add_enabled(model.can_go_back, icon_button("⏴")).on_hover_text("Back").clicked()
+    {
+        *location_dirty = false;
+        actions.push(Action::Back);
+    }
+    if look.shows("forward") &&
+        ui.add_enabled(model.can_go_forward, icon_button("⏵")).on_hover_text("Forward").clicked()
+    {
+        *location_dirty = false;
+        actions.push(Action::Forward);
+    }
+    if look.shows("reload") {
+        if model.loading {
+            ui.add_enabled(false, icon_button("…"));
+        } else if ui.add(icon_button("↻")).on_hover_text("Reload").clicked() {
+            *location_dirty = false;
+            actions.push(Action::Reload);
+        }
+    }
+    if look.shows("home") && ui.add(icon_button("⌂")).on_hover_text("New tab page").clicked() {
+        *location_dirty = false;
+        actions.push(Action::Home);
+    }
+}
+
+/// The star, reading mode and dark mode for the site.
+pub(crate) fn page_buttons(ui: &mut egui::Ui, model: &Model, look: &crate::look::Look, actions: &mut Vec<Action>) {
+    if look.shows("bookmark") &&
+        star_button(ui, model.bookmarked, model.can_bookmark)
+            .on_hover_text(if model.bookmarked { "Remove bookmark" } else { "Bookmark this page" })
+            .clicked()
+    {
+        actions.push(Action::ToggleBookmark);
+    }
+    if look.shows("reader") &&
+        ui.add_enabled(model.can_bookmark, icon_button("Aa"))
+            .on_hover_text("Reading mode: clean text and pictures only")
+            .clicked()
+    {
+        actions.push(Action::ReaderMode);
+    }
+    if let Some(dark) = model.dark_here &&
+        look.shows("dark") &&
+        ui.add(icon_button(if dark { "◐" } else { "○" }))
+            .on_hover_text(if dark { "Dark mode is on for this site (click to turn it off here)" } else { "Dark mode is off for this site (click to turn it on)" })
+            .clicked()
+    {
+        actions.push(Action::ToggleDarkSite);
+    }
+}
+
+/// What Plume Music is playing, with previous, play/pause and next.
+pub(crate) fn music_card(ui: &mut egui::Ui, inner_width: f32) {
+    if let Some(now) = crate::music::now_playing() {
+        let accent = accent_color();
+        ui.add_space(8.0);
+        Frame::new()
+            .fill(tinted(ui.visuals().window_fill, accent, 0.12))
+            .stroke(Stroke::new(1.0_f32, accent.gamma_multiply(0.35)))
+            .corner_radius(12.0)
+            .inner_margin(10.0)
+            .show(ui, |ui| {
+                ui.set_width(inner_width - 22.0);
+                ui.horizontal(|ui| {
+                    equalizer_icon(ui, accent, now.playing);
+                    ui.add(
+                        egui::Label::new(RichText::new(&now.title).strong().size(13.0))
+                            .truncate(),
+                    );
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    // Centre the three buttons.
+                    let used = 28.0 + 34.0 + 28.0 + 2.0 * ui.spacing().item_spacing.x * 1.0;
+                    ui.add_space(((ui.available_width() - used) / 2.0).max(0.0));
+                    if media_button(ui, Glyph::Previous, false, accent)
+                        .on_hover_text("Previous song")
+                        .clicked()
+                    {
+                        crate::music::send_command("prev");
+                    }
+                    let glyph = if now.playing { Glyph::Pause } else { Glyph::Play };
+                    if media_button(ui, glyph, true, accent)
+                        .on_hover_text(if now.playing { "Pause" } else { "Play" })
+                        .clicked()
+                    {
+                        crate::music::send_command("toggle");
+                    }
+                    if media_button(ui, Glyph::Next, false, accent)
+                        .on_hover_text("Next song")
+                        .clicked()
+                    {
+                        crate::music::send_command("next");
+                    }
+                });
+            });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(1000));
+    }
+}
+
+/// The bookmarks: loose ones first, then folders (all flat while `filter` is in use).
+pub(crate) fn bookmark_list(ui: &mut egui::Ui, model: &Model, filter: &str, actions: &mut Vec<Action>) {
+    let shown = model
+        .bookmarks
+        .iter()
+        .filter(|b| filter_matches(filter, &format!("{} {}", b.label, b.url)))
+        .count();
+    if model.bookmarks.is_empty() || shown == 0 {
+        return;
+    }
+    ui.add_space(6.0);
+    ui.separator();
+    ui.label(RichText::new("Bookmarks").small().weak());
+    let mut folders: Vec<&str> = model
+        .bookmarks
+        .iter()
+        .filter(|b| !b.folder.is_empty())
+        .map(|b| b.folder.as_str())
+        .collect();
+    folders.sort_by_key(|name| name.to_lowercase());
+    folders.dedup();
+    if !filter.is_empty() {
+        // While filtering, matching bookmarks are listed flat.
+        for (index, bookmark) in model.bookmarks.iter().enumerate() {
+            if filter_matches(filter, &format!("{} {}", bookmark.label, bookmark.url)) {
+                bookmark_row(ui, index, bookmark, &folders, false, actions);
+            }
+        }
+        return;
+    }
+    for (index, bookmark) in model.bookmarks.iter().enumerate() {
+        if bookmark.folder.is_empty() {
+            bookmark_row(ui, index, bookmark, &folders, true, actions);
+        }
+    }
+    for name in &folders {
+        egui::CollapsingHeader::new(RichText::new(*name).size(13.0))
+            .id_salt(("pteron_bookmark_folder", *name))
+            .default_open(false)
+            .show(ui, |ui| {
+                for (index, bookmark) in model.bookmarks.iter().enumerate() {
+                    if bookmark.folder == *name {
+                        bookmark_row(ui, index, bookmark, &folders, true, actions);
+                    }
+                }
+            });
+    }
+}
+
 /// The list of downloads (hidden when there are none).
-fn downloads_section(ui: &mut egui::Ui) {
+pub(crate) fn downloads_section(ui: &mut egui::Ui) {
     use crate::downloads::{self, State};
     let items = downloads::snapshot();
     if items.is_empty() {
@@ -831,7 +932,7 @@ fn downloads_section(ui: &mut egui::Ui) {
 
 /// Drag to reorder: remembers which row was picked up, draws a line where it would land, and
 /// returns `(from, to)` when it is dropped on this row.
-fn drag_to_reorder(ui: &egui::Ui, key: &str, index: usize, rect: Rect, response: &egui::Response) -> Option<(usize, usize)> {
+pub(crate) fn drag_to_reorder(ui: &egui::Ui, key: &str, index: usize, rect: Rect, response: &egui::Response) -> Option<(usize, usize)> {
     let key = Id::new(key);
     if response.drag_started() {
         ui.memory_mut(|memory| memory.data.insert_temp(key, index));
@@ -853,13 +954,13 @@ fn drag_to_reorder(ui: &egui::Ui, key: &str, index: usize, rect: Rect, response:
 
 fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Action>) {
     let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click_and_drag());
+        ui.allocate_exact_size(vec2(ui.available_width(), row_height()), Sense::click_and_drag());
     if let Some((from, to)) = drag_to_reorder(ui, "pteron_tab_drag", index, rect, &response) {
         actions.push(Action::MoveTab { from, to });
     }
     let close_rect = Rect::from_min_size(
         pos2(rect.max.x - 26.0, rect.min.y + 2.0),
-        vec2(24.0, ROW_HEIGHT - 4.0),
+        vec2(24.0, row_height() - 4.0),
     );
     let close = ui.interact(close_rect, response.id.with("close"), Sense::click());
     let row_hovered = ui.rect_contains_pointer(rect);
@@ -905,7 +1006,7 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Acti
     if tab.pinned {
         // A pinned tab shows a pin instead of a close button; clicking it unpins.
         pin_glyph(painter, close_rect.center(), accent_color(), row_hovered);
-    } else if row_hovered {
+    } else if row_hovered || close_always() {
         if close.hovered() {
             painter.circle_filled(close_rect.center(), 10.0, text_color.gamma_multiply(0.18));
         }
@@ -930,33 +1031,35 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Acti
         actions.push(Action::Activate(index));
     }
     let response = if tab.label.chars().count() > 26 { response.on_hover_text(&tab.label) } else { response };
-    response.context_menu(|ui| {
-        let pin_label = if tab.pinned { "Unpin tab" } else { "Pin tab" };
-        if ui.button(pin_label).clicked() {
+    response.context_menu(|ui| tab_menu(ui, index, tab.pinned, actions));
+}
+
+/// The right-click menu of a live tab.
+pub(crate) fn tab_menu(ui: &mut egui::Ui, index: usize, pinned: bool, actions: &mut Vec<Action>) {
+    if ui.button(if pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
+        actions.push(Action::TogglePin(index));
+        ui.close();
+    }
+    if ui.button("Open in default browser").clicked() {
+        actions.push(Action::OpenExternal(index));
+        ui.close();
+    }
+    if ui.button("Check this page").on_hover_text("Find out why a page is blank or broken").clicked() {
+        actions.push(Action::CheckPage(index));
+        ui.close();
+    }
+    if ui.button("Close tab").clicked() {
+        if pinned {
             actions.push(Action::TogglePin(index));
-            ui.close();
         }
-        if ui.button("Open in default browser").clicked() {
-            actions.push(Action::OpenExternal(index));
-            ui.close();
-        }
-        if ui.button("Check this page").on_hover_text("Find out why a page is blank or broken").clicked() {
-            actions.push(Action::CheckPage(index));
-            ui.close();
-        }
-        if ui.button("Close tab").clicked() {
-            if tab.pinned {
-                actions.push(Action::TogglePin(index));
-            }
-            actions.push(Action::Close(index));
-            ui.close();
-        }
-    });
+        actions.push(Action::Close(index));
+        ui.close();
+    }
 }
 
 /// The list of matching pages under the address bar. Rows react to the mouse *press*, because
 /// the address bar loses focus (and this list disappears) before the button is released.
-fn suggestion_popup(
+pub(crate) fn suggestion_popup(
     ctx: &Context,
     field: Rect,
     suggestions: &[crate::library::Suggestion],
@@ -989,7 +1092,7 @@ fn suggestion_popup(
                     clip.text(
                         pos2(rect.min.x + 14.0, rect.center().y),
                         Align2::CENTER_CENTER,
-                        if suggestion.bookmarked { "\u{2605}" } else { "\u{29D6}" },
+                        if suggestion.bookmarked { "\u{2605}" } else { "\u{1F558}" },
                         FontId::proportional(14.0),
                         if suggestion.bookmarked { accent_color() } else { weak },
                     );
@@ -1018,7 +1121,7 @@ fn suggestion_popup(
 }
 
 /// A bookmark: click opens it here, middle-click opens it in a new tab.
-fn bookmark_row(
+pub(crate) fn bookmark_row(
     ui: &mut egui::Ui,
     index: usize,
     bookmark: &BookmarkRow,
@@ -1027,7 +1130,7 @@ fn bookmark_row(
     actions: &mut Vec<Action>,
 ) {
     let (rect, response) = ui.allocate_exact_size(
-        vec2(ui.available_width(), ROW_HEIGHT),
+        vec2(ui.available_width(), row_height()),
         if can_drag { Sense::click_and_drag() } else { Sense::click() },
     );
     if can_drag &&
@@ -1094,7 +1197,7 @@ fn bookmark_row(
 }
 
 /// A small pin, drawn with the painter. Filled when `strong`.
-fn pin_glyph(painter: &egui::Painter, center: Pos2, color: Color32, strong: bool) {
+pub(crate) fn pin_glyph(painter: &egui::Painter, center: Pos2, color: Color32, strong: bool) {
     let color = if strong { color } else { color.gamma_multiply(0.6) };
     painter.circle_filled(center + vec2(0.0, -3.0), 3.2, color);
     painter.line_segment(
@@ -1106,7 +1209,7 @@ fn pin_glyph(painter: &egui::Painter, center: Pos2, color: Color32, strong: bool
 fn sleeping_row(ui: &mut egui::Ui, index: usize, tab: &SleepingRow, actions: &mut Vec<Action>) {
     let label = tab.label.as_str();
     let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+        ui.allocate_exact_size(vec2(ui.available_width(), row_height()), Sense::click());
     let visuals = ui.visuals();
     let fill = response
         .hovered()
@@ -1136,16 +1239,17 @@ fn sleeping_row(ui: &mut egui::Ui, index: usize, tab: &SleepingRow, actions: &mu
             false,
         );
     }
-    response.context_menu(|ui| {
-        let pin_label = if tab.pinned { "Unpin tab" } else { "Pin tab" };
-        if ui.button(pin_label).clicked() {
-            actions.push(Action::TogglePinSleeping(index));
-            ui.close();
-        }
-        if ui.button("Close tab").clicked() {
-            actions.push(Action::CloseSleeping(index));
-            ui.close();
-        }
-    });
+    response.context_menu(|ui| sleeping_menu(ui, index, tab.pinned, actions));
 }
 
+/// The right-click menu of a sleeping tab.
+pub(crate) fn sleeping_menu(ui: &mut egui::Ui, index: usize, pinned: bool, actions: &mut Vec<Action>) {
+    if ui.button(if pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
+        actions.push(Action::TogglePinSleeping(index));
+        ui.close();
+    }
+    if ui.button("Close tab").clicked() {
+        actions.push(Action::CloseSleeping(index));
+        ui.close();
+    }
+}

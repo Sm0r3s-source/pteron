@@ -122,14 +122,15 @@ pub(crate) fn prefer_x11() -> bool {
         std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty())
 }
 
-/// Where the mouse is, as the page itself reports it: 0 unknown or outside, 1 over the page, 2 at its left edge.
+/// Where the mouse is, as the page itself reports it: 0 unknown or outside, 1 over the page,
+/// 2 at its left edge, 3 at its right edge.
 static POINTER: AtomicU8 = AtomicU8::new(0);
 
 /// Added to every page: tells Pteron where the mouse is, because egui cannot see the mouse over
 /// a native view (the sidebar needs it to open and close).
 #[cfg(pteron_wry)]
 const POINTER_SCRIPT: &str = "(()=>{let s='';const p=v=>{if(v!==s){s=v;try{window.ipc.postMessage(v)}catch(e){}}};\
-addEventListener('mousemove',e=>p(e.clientX<=5?'edge':'in'),{passive:true,capture:true});\
+addEventListener('mousemove',e=>p(e.clientX<=5?'edge':e.clientX>=innerWidth-6?'redge':'in'),{passive:true,capture:true});\
 document.addEventListener('mouseleave',()=>p('out'));})();";
 
 /// The engine's helper processes are being ended: no new view starts until that is done (it
@@ -194,8 +195,9 @@ pub(crate) fn pointer_in_page() -> bool {
     POINTER.load(Relaxed) == 1
 }
 
-pub(crate) fn pointer_at_edge() -> bool {
-    POINTER.load(Relaxed) == 2
+/// The mouse is at the page's left edge (`right`: its right edge).
+pub(crate) fn pointer_at_edge(right: bool) -> bool {
+    POINTER.load(Relaxed) == if right { 3 } else { 2 }
 }
 
 static ALIVE: AtomicUsize = AtomicUsize::new(0);
@@ -463,6 +465,7 @@ impl Host {
                 let state = match request.body().as_str() {
                     "in" => 1,
                     "edge" => 2,
+                    "redge" => 3,
                     _ => 0,
                 };
                 // (The page reports only changes.) Draw a frame so the sidebar opens or closes now.

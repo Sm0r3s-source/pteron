@@ -23,19 +23,27 @@ pub(crate) const PRESETS: [(&str, &str, [u8; 3]); 6] = [
 /// Biggest picture accepted for the new tab page (it is placed inside the page).
 pub(crate) const MAX_PICTURE_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Softer corners and quicker fades for every look.
-pub(crate) fn polish_style(ctx: &egui::Context) {
+/// Corners, spacing and quick fades for every look, from the user's choices.
+pub(crate) fn polish_style(ctx: &egui::Context, look: &crate::look::Look) {
+    let round = look.roundness.min(16) as u8;
+    let (padding, spacing, height) = match look.density.as_str() {
+        "compact" => (egui::vec2(6.0, 2.0), egui::vec2(6.0, 2.0), 16.0),
+        "roomy" => (egui::vec2(10.0, 6.0), egui::vec2(10.0, 6.0), 24.0),
+        _ => (egui::vec2(8.0, 4.0), egui::vec2(8.0, 3.0), 18.0),
+    };
     ctx.all_styles_mut(|style| {
-        let widget = egui::CornerRadius::same(8);
+        let widget = egui::CornerRadius::same(round);
         style.visuals.widgets.noninteractive.corner_radius = widget;
         style.visuals.widgets.inactive.corner_radius = widget;
         style.visuals.widgets.hovered.corner_radius = widget;
         style.visuals.widgets.active.corner_radius = widget;
         style.visuals.widgets.open.corner_radius = widget;
-        style.visuals.window_corner_radius = egui::CornerRadius::same(12);
-        style.visuals.menu_corner_radius = egui::CornerRadius::same(10);
+        style.visuals.window_corner_radius = egui::CornerRadius::same(round + 4);
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(round + 2);
         style.animation_time = 0.12;
-        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        style.spacing.button_padding = padding;
+        style.spacing.item_spacing = spacing;
+        style.spacing.interact_size.y = height;
     });
 }
 
@@ -71,7 +79,7 @@ const fn palette(dark: bool, bg: [u8; 3], surface: [u8; 3], text: [u8; 3], muted
 
 /// Ready-made full themes: id, name, colours. ("system", "light" and "dark" are the plain
 /// built-in looks; "custom" is built from the user's own background colour.)
-pub(crate) const THEMES: [(&str, &str, Palette); 7] = [
+pub(crate) const THEMES: [(&str, &str, Palette); 11] = [
     ("midnight", "Midnight", palette(true, [0x0f, 0x14, 0x20], [0x1a, 0x21, 0x33], [0xe6, 0xeb, 0xf5], [0x8d, 0x98, 0xb0], [0x6e, 0xa8, 0xfe])),
     ("forest", "Forest", palette(true, [0x12, 0x1a, 0x15], [0x1c, 0x28, 0x22], [0xe3, 0xec, 0xe5], [0x8a, 0xa0, 0x92], [0x5e, 0xcb, 0x8a])),
     ("sunset", "Sunset", palette(true, [0x1d, 0x15, 0x17], [0x2b, 0x1e, 0x21], [0xf4, 0xe9, 0xe4], [0xb3, 0x9a, 0x95], [0xff, 0x8a, 0x5c])),
@@ -79,6 +87,11 @@ pub(crate) const THEMES: [(&str, &str, Palette); 7] = [
     ("paper", "Paper", palette(false, [0xf3, 0xef, 0xe6], [0xff, 0xfd, 0xf8], [0x2b, 0x29, 0x23], [0x7f, 0x7a, 0x6e], [0xb5, 0x65, 0x1d])),
     ("rose", "Rose", palette(false, [0xfb, 0xf1, 0xf4], [0xff, 0xff, 0xff], [0x3a, 0x24, 0x30], [0x8f, 0x6f, 0x7e], [0xd6, 0x45, 0x7a])),
     ("ocean", "Ocean", palette(false, [0xea, 0xf3, 0xfa], [0xff, 0xff, 0xff], [0x17, 0x30, 0x3f], [0x58, 0x73, 0x88], [0x1f, 0x8a, 0xc0])),
+    // Matching the browser layouts (see `look::LAYOUTS`).
+    ("daylight", "Daylight", palette(false, [0xdf, 0xe3, 0xe8], [0xff, 0xff, 0xff], [0x1f, 0x1f, 0x1f], [0x5f, 0x63, 0x68], [0x0b, 0x57, 0xd0])),
+    ("mist", "Mist", palette(false, [0xf0, 0xf0, 0xf4], [0xfb, 0xfb, 0xfe], [0x15, 0x14, 0x1a], [0x5b, 0x5b, 0x66], [0x00, 0x61, 0xe0])),
+    ("nightred", "Night red", palette(true, [0x1b, 0x1d, 0x24], [0x27, 0x2a, 0x33], [0xe8, 0xea, 0xed], [0x9a, 0xa0, 0xaa], [0xff, 0x2d, 0x40])),
+    ("neon", "Neon", palette(true, [0x0e, 0x0b, 0x13], [0x1b, 0x15, 0x21], [0xf3, 0xee, 0xf8], [0x9a, 0x8f, 0xa8], [0xfa, 0x1e, 0x4e])),
 ];
 
 /// Preview colours for the three built-in looks (the real ones come from egui itself).
@@ -106,7 +119,15 @@ pub(crate) fn palette_for(settings: &Settings) -> Option<Palette> {
     };
     let mut found = if settings.theme == "custom" {
         let bg = parse_hex(&settings.custom_bg).unwrap_or([0x1b, 0x1c, 0x1e]);
-        Some(custom_palette(bg, PRESETS[0].2))
+        let mut p = custom_palette(bg, PRESETS[0].2);
+        // Colours set in the theme editor win over the worked-out ones.
+        let look = &settings.look;
+        for (text, color) in [(&look.custom_surface, &mut p.surface), (&look.custom_text, &mut p.text), (&look.custom_muted, &mut p.muted)] {
+            if let Some(rgb) = parse_hex(text) {
+                *color = rgb;
+            }
+        }
+        Some(p)
     } else {
         THEMES.iter().find(|(id, ..)| *id == settings.theme).map(|(.., p)| *p)
     }?;
@@ -114,6 +135,19 @@ pub(crate) fn palette_for(settings: &Settings) -> Option<Palette> {
         found.accent = accent;
     }
     Some(found)
+}
+
+/// Start the custom theme from `p`'s colours, for the theme editor.
+pub(crate) fn start_custom_from(settings: &mut Settings, p: &Palette) {
+    settings.theme = "custom".into();
+    settings.custom_bg = to_hex(p.bg);
+    settings.look.custom_surface = to_hex(p.surface);
+    settings.look.custom_text = to_hex(p.text);
+    settings.look.custom_muted = to_hex(p.muted);
+    if settings.accent == "auto" {
+        settings.accent = "custom".into();
+        settings.accent_custom = to_hex(p.accent);
+    }
 }
 
 /// The accent the user picked from the swatches (not "auto").
@@ -471,6 +505,17 @@ mod tests {
                 "{id}: text is hard to read"
             );
         }
+    }
+
+    #[test]
+    fn theme_editor_colours_win() {
+        let mut s = Settings::default();
+        let neon = THEMES.iter().find(|(id, ..)| *id == "neon").unwrap().2;
+        start_custom_from(&mut s, &neon);
+        let p = palette_for(&s).unwrap();
+        assert_eq!((p.bg, p.surface, p.text, p.muted, p.accent, p.dark), (neon.bg, neon.surface, neon.text, neon.muted, neon.accent, true));
+        s.look.custom_text.clear();
+        assert_eq!(palette_for(&s).unwrap().text, [0xec, 0xeb, 0xe8]);
     }
 
     #[test]

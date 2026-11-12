@@ -38,6 +38,8 @@ mod locks;
 mod util;
 #[path = "../../ports/servoshell/compat_view.rs"]
 mod compat_view;
+#[path = "../../ports/servoshell/look.rs"]
+mod look;
 #[path = "../../ports/servoshell/signing.rs"]
 mod signing;
 #[path = "../../ports/servoshell/multisearch.rs"]
@@ -60,6 +62,8 @@ mod report;
 mod music;
 #[path = "../../ports/servoshell/desktop/sidebar.rs"]
 mod sidebar;
+#[path = "../../ports/servoshell/desktop/topbar.rs"]
+mod topbar;
 #[path = "../../ports/servoshell/desktop/settings_page.rs"]
 mod settings_page;
 

@@ -38,6 +38,7 @@ mod compat;
 mod compat_host;
 mod compat_view;
 mod locks;
+mod look;
 mod signing;
 mod util;
 mod filters;

@@ -188,6 +188,8 @@ impl App {
                 .map(Rc::new),
         ));
         running_state.apply_compat();
+        // Pteron: dark mode and site styles for pages.
+        running_state.refresh_page_look();
         let initial_url = self.initial_url.as_url().clone();
         let window = running_state.open_window(
             platform_window,

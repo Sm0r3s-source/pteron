@@ -99,6 +99,8 @@ pub(crate) struct Settings {
     pub compat_tab_handoff: bool,
     /// Sites that are never handed over to Servo (it draws them badly): they stay in the compatibility tab.
     pub compat_tab_keep_sites: Vec<String>,
+    /// Layout, interface, dark mode for pages, site styles and shortcuts (see `look`).
+    pub look: crate::look::Look,
 }
 
 impl Default for Settings {
@@ -141,6 +143,7 @@ impl Default for Settings {
             compat_tab_handoff: false,
             // Claude's message box is an editor that Servo cannot type into.
             compat_tab_keep_sites: vec!["claude.ai".to_string()],
+            look: crate::look::Look::default(),
         }
     }
 }
@@ -279,8 +282,11 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
     {
         settings.newtab_color = color.to_string();
     }
+    if let Some(look) = value.get("look") {
+        settings.look = crate::look::Look::from_json(look);
+    }
     if let Some(tiles) = value.get("newtab_tiles").and_then(|v| v.as_str()) &&
-        matches!(tiles, "off" | "bookmarks" | "frequent")
+        matches!(tiles, "off" | "mine" | "bookmarks" | "frequent")
     {
         settings.newtab_tiles = tiles.to_string();
     }
@@ -325,6 +331,22 @@ pub(crate) fn settings() -> Settings {
 /// Minutes before background tabs sleep (cheap: no cloning).
 pub(crate) fn tab_sleep_minutes() -> u32 {
     store().read().map(|s| s.tab_sleep_minutes).unwrap_or(5)
+}
+
+/// Counts changes made outside the settings page (the new tab page's shortcut editing), so the
+/// window can pick them up.
+static OUTSIDE_CHANGES: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn outside_changes() -> u64 {
+    OUTSIDE_CHANGES.load(Ordering::SeqCst)
+}
+
+/// Change the settings from outside the settings page.
+pub(crate) fn edit(change: impl FnOnce(&mut Settings)) {
+    let mut settings = settings();
+    change(&mut settings);
+    update(settings);
+    OUTSIDE_CHANGES.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Replace the settings and save them to disk.
@@ -379,6 +401,7 @@ pub(crate) fn update(new_settings: Settings) {
         "compat_tab_handoff": new_settings.compat_tab_handoff,
         "compat_tab_keep_sites": new_settings.compat_tab_keep_sites,
         "compat_tab_sites": new_settings.compat_tab_sites,
+        "look": new_settings.look,
     });
     if let Err(error) = std::fs::write(&path, json.to_string()) {
         warn!("Could not save {}: {error}", path.display());
@@ -535,7 +558,8 @@ pub(crate) fn newtab_look_changed(old: &Settings, new: &Settings) -> bool {
             s.newtab_color.clone(), s.newtab_tiles.clone(), s.engine.clone(), s.searxng_url.clone(),
         )
     };
-    look(old) != look(new)
+    let colours = |s: &Settings| (s.look.custom_surface.clone(), s.look.custom_text.clone(), s.look.custom_muted.clone());
+    look(old) != look(new) || colours(old) != colours(new) || old.look.shortcuts != new.look.shortcuts
 }
 
 /// Where the settings file lives, for display in the About page.
@@ -594,15 +618,68 @@ fn tile_html(suggestion: &crate::library::Suggestion) -> String {
     )
 }
 
-/// Tiles for the pages the user bookmarked or visits most.
+/// A secret for this run, so that only Pteron's own new tab page can change its shortcuts.
+pub(crate) fn newtab_token() -> &'static str {
+    static TOKEN: OnceLock<String> = OnceLock::new();
+    TOKEN.get_or_init(|| {
+        use ring::rand::SecureRandom;
+        let mut bytes = [0u8; 12];
+        let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
+/// `servo:newtab-edit?t=...&add=...&name=...` or `...&remove=...`: the new tab page adds or
+/// removes one of the user's shortcuts, then goes back to the new tab page.
+pub(crate) fn newtab_edit(url: &url::Url) -> String {
+    let pairs: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+    if pairs.get("t").map(String::as_str) == Some(newtab_token()) {
+        if let Some(remove) = pairs.get("remove") {
+            edit(|s| s.look.shortcuts.retain(|shortcut| shortcut.url != *remove));
+        } else if let Some(add) = pairs.get("add") {
+            let name = pairs.get("name").cloned().unwrap_or_default();
+            edit(|s| {
+                if s.look.add_shortcut(&name, add) && s.newtab_tiles == "off" {
+                    s.newtab_tiles = "mine".into();
+                }
+            });
+        }
+    }
+    "<!DOCTYPE html><meta charset=\"utf-8\"><script>location.replace('servo:newtab')</script>".into()
+}
+
+/// Tiles: the user's own shortcuts, then the pages they bookmarked or visit most.
 fn shortcuts_html() -> String {
     let mut html = String::new();
-    let mode = settings().newtab_tiles;
+    let settings = settings();
+    let mode = settings.newtab_tiles.as_str();
     if mode == "off" {
         return html;
     }
+    let token = newtab_token();
+    for shortcut in &settings.look.shortcuts {
+        let tile = tile_html(&crate::library::Suggestion {
+            url: shortcut.url.clone(),
+            title: shortcut.name.clone(),
+            bookmarked: false,
+        });
+        html.push_str(&format!(
+            "<span class=\"own\">{tile}<a class=\"del\" title=\"Remove\" href=\"servo:newtab-edit?t={token}&amp;remove={}\">&times;</a></span>",
+            encode_query(&shortcut.url)
+        ));
+    }
+    html.push_str(&format!(
+        "<details class=\"tile add\"><summary><span class=\"ico\">+</span><span class=\"name\">Add shortcut</span></summary>\
+<form class=\"addform\" onsubmit=\"event.preventDefault();var e=this.elements;location.href='servo:newtab-edit?t={token}&name='+encodeURIComponent(e.name.value)+'&add='+encodeURIComponent(e.add.value)\">\
+<input name=\"name\" placeholder=\"Name\" /><input name=\"add\" placeholder=\"Address\" required /><button type=\"submit\">Add</button></form></details>"
+    ));
+    if mode == "mine" {
+        return html;
+    }
     for suggestion in crate::library::shortcuts(8, mode == "frequent") {
-        html.push_str(&tile_html(&suggestion));
+        if !settings.look.shortcuts.iter().any(|shortcut| shortcut.url == suggestion.url) {
+            html.push_str(&tile_html(&suggestion));
+        }
     }
     let folders = crate::library::folder_shortcuts();
     if !folders.is_empty() {

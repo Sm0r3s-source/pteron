@@ -16,8 +16,18 @@ wrong or do not work (see [Known problems](#known-problems)).
 - Address bar shortcuts: `g`, `ddg`, `yt`, `w`, `gh`, `maps`, `r`, and `i` for pictures
   (for example `yt lofi`, `i red car`)
 - Themes, accent colours and a custom new tab page (background, tiles)
+- Your own shortcuts on the new tab page (add with **+**, remove with **×**)
 - Search engines: DuckDuckGo, Google, Bing, Brave, Startpage or your own SearXNG; optionally
   search several engines at once (one tab per engine, or one merged results page)
+
+**Make it yours**
+- Settings, **Layout & buttons**: Pteron's sidebar, or tabs on top in the style of Chrome, Firefox, Opera or
+  Opera GX (the Opera styles add a bar of shortcuts down the left side); each comes with matching colours
+- Sidebar on the left or right and as wide as you like; interface size (75 to 175%), compact or roomy spacing,
+  corner roundness; choose which buttons show; site icons and close buttons on tabs; a bookmarks bar
+- Settings, Appearance, **Theme editor**: start from any theme and change every colour
+- Settings, **Web pages**: dark mode for sites (pages with their own dark look use it, other light pages are
+  turned dark, with a switch per site) and your own CSS for any site
 
 **Plume (YouTube) and Plume Music**
 - YouTube search, channels and videos open in simple Pteron pages with a built-in player (up to

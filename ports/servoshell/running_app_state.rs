@@ -34,7 +34,7 @@ use servo::{
     EmbedderControlId, EventLoopWaker, GenericSender, InputEvent, InputEventId, InputEventResult,
     JSValue, LoadStatus, MediaSessionEvent, NavigationRequest, PermissionRequest, PrefValue,
     Preferences,
-    ScreenshotCaptureError, Servo, ServoDelegate, ServoError, TraversalId, UserContentManager,
+    ScreenshotCaptureError, Servo, ServoDelegate, ServoError, TraversalId, UserContentManager, UserScript,
     WebDriverCommandMsg, WebDriverJSResult, WebDriverLoadStatus, WebDriverScriptCommand,
     WebDriverSenders, WebView, WebViewDelegate, WebViewId,
 };
@@ -243,6 +243,9 @@ pub(crate) struct RunningAppState {
     /// The [`UserContentManager`] for all `WebView`s created.
     pub(crate) user_content_manager: Rc<UserContentManager>,
 
+    /// Pteron: the script for dark mode and site styles (see `look::page_script`).
+    page_look_script: RefCell<Option<Rc<UserScript>>>,
+
     /// Whether or not program exit has been triggered. This means that all windows
     /// will be destroyed and shutdown will start at the end of the current event loop.
     exit_scheduled: Cell<bool>,
@@ -315,6 +318,7 @@ impl RunningAppState {
             achieved_stable_image: Default::default(),
             exit_scheduled: Default::default(),
             user_content_manager,
+            page_look_script: Default::default(),
             experimental_preferences_enabled,
             accessibility_active: Cell::new(false),
         }
@@ -335,6 +339,22 @@ impl RunningAppState {
         }
 
         window
+    }
+
+    /// Pteron: put the current dark mode and site styles into pages (from their next load on)
+    /// and tell open pages which colour scheme to use.
+    pub(crate) fn refresh_page_look(&self) {
+        if let Some(old) = self.page_look_script.borrow_mut().take() {
+            self.user_content_manager.remove_script(old);
+        }
+        if let Some(source) = crate::look::page_script(&crate::pteron::settings().look) {
+            let script = Rc::new(UserScript::new(source, None));
+            self.user_content_manager.add_script(script.clone());
+            *self.page_look_script.borrow_mut() = Some(script);
+        }
+        for window in self.windows().iter() {
+            window.refresh_page_themes();
+        }
     }
 
     pub(crate) fn windows<'a>(&'a self) -> Ref<'a, Vec<Rc<ServoShellWindow>>> {
@@ -797,6 +817,8 @@ impl WebViewDelegate for RunningAppState {
             let _ = if steps < 0 { webview.go_back(steps.unsigned_abs()) } else { webview.go_forward(steps.unsigned_abs()) };
         }
         let window = self.window_for_webview(&webview);
+        // Pteron: dark mode for pages may be on for this site and off for the last one.
+        webview.notify_theme_change(window.page_theme(entries.get(current)));
         // Pages dropped from the back/forward cache are freed at the next garbage collection.
         if entries.len() > 1 {
             window.schedule_memory_cleanup(std::time::Duration::from_secs(8));

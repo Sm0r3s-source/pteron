@@ -168,3 +168,70 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Pteron: the user's own shortcuts can be removed, and new ones added from the page. */
+.own {
+  position: relative;
+  display: inline-flex;
+}
+
+.own .del {
+  position: absolute;
+  top: -6px;
+  right: 14px;
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 18px;
+  text-align: center;
+  text-decoration: none;
+  visibility: hidden;
+}
+
+.own:hover .del {
+  visibility: visible;
+}
+
+.add summary {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+}
+
+.add summary::-webkit-details-marker {
+  display: none;
+}
+
+.addform {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 200px;
+}
+
+.addform input {
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.addform button {
+  background: var(--gold);
+  color: var(--bg);
+  border-radius: 8px;
+  font-size: 13px;
+  padding: 6px;
+}
+
+.add[open] {
+  width: 210px;
+}

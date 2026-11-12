@@ -21,7 +21,7 @@ use servo::{
     EmbedderControl, EmbedderControlId, ImeEvent, InputEvent, InputEventId, InputEventResult,
     InputMethodControl, Key, KeyState, KeyboardEvent, Modifiers, MouseButton as ServoMouseButton,
     MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, NamedKey,
-    OffscreenRenderingContext, PermissionRequest, RenderingContext, ScreenGeometry, Theme,
+    OffscreenRenderingContext, PermissionRequest, RenderingContext, ScreenGeometry,
     TouchEvent, TouchEventType, TouchId, TouchPointerType, WebRenderDebugOption, WebView,
     WebViewId, WheelDelta, WheelEvent, WheelMode, WindowRenderingContext,
     convert_rect_to_css_pixel,
@@ -813,11 +813,9 @@ impl HeadedWindow {
                     }
                     window.schedule_close();
                 },
-                WindowEvent::ThemeChanged(theme) => {
-                    webview.notify_theme_change(match theme {
-                        winit::window::Theme::Light => Theme::Light,
-                        winit::window::Theme::Dark => Theme::Dark,
-                    });
+                WindowEvent::ThemeChanged(_) => {
+                    // Pteron: dark mode for pages may override the system's choice.
+                    window.refresh_page_themes();
                 },
                 WindowEvent::Ime(ime) => match ime {
                     Ime::Enabled => {
