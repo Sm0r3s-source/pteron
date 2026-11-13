@@ -5,7 +5,15 @@ Sidebar tabs, tabs that sleep to save memory, its own YouTube player and music a
 manager, an ad blocker, and a Memory saver mode for older computers.
 
 Pteron is an early test version. Servo does not support every web feature yet, so some sites look
-wrong or do not work (see [Known problems](#known-problems)).
+wrong or do not work (see [Known problems](#known-problems)). Read [Before you install](#before-you-install) first.
+
+![Pteron with its sidebar and the new tab page](screenshots/sidebar.png)
+
+| Chrome-style layout | Opera GX-style layout |
+|---|---|
+| ![Tabs on top, Chrome style](screenshots/chrome-style.png) | ![Opera GX style with the bookmarks panel open](screenshots/opera-gx-style.png) |
+| **Choosing a layout** | **Theme editor** |
+| ![Settings, Layout and buttons](screenshots/settings-layout.png) | ![Settings, theme editor](screenshots/theme-editor.png) |
 
 ## Features
 
@@ -134,35 +142,44 @@ Releases are published on the [Releases page](https://github.com/Sm0r3s-source/p
 as `Pteron-Setup.exe` and a zip for Windows, and `Pteron-build-N-linux64.tar.gz` for Linux (unpack it and run `./install.sh`; it installs for your user only, no root). Pteron updates itself from **Settings, About**; nothing is
 installed without your say-so. Windows may warn about the installer because it is not signed yet.
 
+## Before you install
+
+Things that carry some risk, said plainly:
+
+- **The installer is not code-signed.** Windows warns about it, and nothing but GitHub's own download link vouches
+  for the first copy you install; the `.sha256` file next to it only catches a broken download. From then on, Pteron
+  installs an update only if its SHA-256 is signed with the author's key, which is built into Pteron.
+- **Saved passwords** are encrypted with Windows' own protection (DPAPI), tied to your Windows account, in
+  `%APPDATA%\Pteron\passwords.json`. That stops someone who copies the file to another computer or signs in as
+  another user. It does not stop a program running under your account, or a person at your unlocked PC: there is no
+  master password. Passwords are filled only after a click, are never synced and never put in problem reports.
+- **The compatibility tab** shows a page in your system's web engine (WebView2 or WebKitGTK) with its own cookies;
+  Pteron's ad blocker and saved passwords do not apply there.
+- **Handing a browser check over (experimental, off by default):** after the system engine passes a site's browser
+  check, Pteron copies that site's cookies, including the pass, into its own engine, and from then on tells every
+  site it is the system engine's browser, until you switch the option off. The site then talks to a different engine
+  than the one it checked. Sites may refuse it or see it as getting around their check; leave it off unless you
+  need it.
+- **Plume** talks to YouTube through the interface YouTube's own apps use, not an official public API. It can stop
+  working whenever YouTube changes something, and saving videos or songs may be against YouTube's terms or the law
+  where you live. That is yours to judge.
+- **It is one person's test software** on an engine that is still young: no private window, no extensions, and no
+  security review. Do not make it the only browser you rely on for banking or work.
+
 ## Building
 
-Pteron is a set of changes on top of a Servo v0.7.0 checkout, not a fork with its own history.
-The update scripts copy the changed files into the checkout and build it.
-
-You need a normal Servo build setup on Windows:
-- Rust (the toolchain Servo pins)
-- Visual Studio Build Tools with the "Desktop development with C++" workload
-- LLVM (`winget install LLVM.LLVM`), so that `lld-link.exe` is on your PATH
-- The other prerequisites listed in the [Servo book](https://book.servo.org)
-
-Then, from the folder with an update:
+Pteron is a set of files laid over a Servo v0.7.0 checkout, kept here at the same paths they have in Servo.
+[BUILD.md](BUILD.md) has the steps; in short:
 
 ```
-powershell -ExecutionPolicy Bypass -File .\pteron_updateNN.ps1 -Publish
+git clone https://github.com/Sm0r3s-source/pteron.git
+bash pteron/pteron_build/from_repo.sh                                              # Linux or WSL2
+powershell -ExecutionPolicy Bypass -File .\pteron\pteron_build\from_repo.ps1       # Windows
 ```
 
-`-NoBuild` copies the files without building; `-Publish` builds, packages and publishes a release;
-`-Production` builds like the official Servo releases (link-time optimisation, optimised for size), which gives a
-smaller, faster Pteron that uses less memory but takes an hour or more to build and needs about 16 GB of memory.
-The unit tests of Pteron's own modules run on every push (`.github/workflows/pteron-tests.yml`, `pteron_ci/`); a fully
-reproducible Servo build in CI is planned.
-
-### Linux
-
-The Linux build is new (update 62) and is built from the same source. In Linux or WSL2, put `pteron_update62.zip` and
-`pteron_build_linux.sh` in one folder and run `bash pteron_build_linux.sh` (about 25 GB of disk, 8 GB of memory). The
-compatibility tab on Linux uses WebKitGTK (`libwebkit2gtk-4.1`, `libgtk-3`) and is built in with `--features compat_linux`; it runs
-in X11 mode (Pteron uses X11/XWayland on Linux for now). Saved passwords are Windows only for now. macOS comes later.
+The scripts fetch Servo v0.7.0, copy Pteron's files over it and build. On Linux the compatibility tab uses WebKitGTK
+(`libwebkit2gtk-4.1`, `libgtk-3`) and Pteron runs in X11 mode (X11/XWayland) for now. The unit tests of Pteron's own
+modules run on every push (`.github/workflows/pteron-tests.yml`, `pteron_ci/`); a full Servo build in CI is planned.
 
 ## Where things are
 
@@ -205,5 +222,6 @@ Desktop with the details (no passwords). Attach it to an issue.
 
 ## License
 
-Pteron is released under the [Mozilla Public License 2.0](https://www.mozilla.org/MPL/2.0/), the
-same as Servo.
+Pteron is released under the [Mozilla Public License 2.0](LICENSE), the same as Servo. The files under
+`components/`, `python/` and `resources/` are Servo's own files with Pteron's changes; Servo is the work of the
+[Servo project](https://servo.org) contributors.
