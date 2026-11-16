@@ -36,7 +36,7 @@ pub(crate) const AUDIO_ONLY: u32 = 0;
 const MAX_SESSIONS: usize = 4;
 /// The first part of a video that is made ready at once (seconds), so playback can start
 /// while the whole file layout is still being worked out.
-pub(crate) const PARTIAL_SECS: f64 = 30.0;
+pub(crate) const PARTIAL_SECS: f64 = 75.0;
 const MAX_CONNECTIONS: usize = 12;
 /// Same identity yt-dlp presents for this client.
 pub(crate) const UPSTREAM_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";

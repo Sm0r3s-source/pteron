@@ -52,7 +52,7 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 **Plume (YouTube) and Plume Music**
 - YouTube search, channels and videos open in simple Pteron pages with a built-in player (up to
   1080p60, H.264), because Servo has no Media Source Extensions yet
-- Videos start faster (the first 30 seconds play while the rest loads; "Up next" loads after the player
+- Videos start faster (the first 75 seconds play while the rest loads; "Up next" loads after the player
   shows; recent videos are remembered for 30 minutes)
 - **Subscriptions without an account**: subscribe on a video or channel, and the home page shows their newest
   videos (from YouTube's public feeds); import a Google Takeout CSV or an OPML file, export both

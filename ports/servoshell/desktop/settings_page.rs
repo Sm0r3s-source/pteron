@@ -948,7 +948,7 @@ fn video_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                 .checkbox(&mut settings.youtube_player, "Browse and play YouTube in Pteron's own pages")
                 .changed();
             changed |= ui
-                .checkbox(&mut settings.fast_start, "Start long videos sooner (first 30 seconds at once, then the whole video)")
+                .checkbox(&mut settings.fast_start, "Start long videos sooner (first 75 seconds at once, then the whole video)")
                 .changed();
         },
     );

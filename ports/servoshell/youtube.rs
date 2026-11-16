@@ -1250,7 +1250,21 @@ function ccAuto(){if(!ccb||!prefs.captions)return;var best=-1;
 pl('pref:get',function(t){try{var r=JSON.parse(t);prefs.autonext=!!r.autonext;prefs.loop=!!r.loop;prefs.captions=r.captions||'';}catch(x){}paintSw();ccAuto();});
 document.addEventListener('keydown',function(x){var tg=x.target&&x.target.tagName;if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA'||x.ctrlKey||x.altKey||x.metaKey)return;
   if(x.key==='c'&&ccb){if(ccOn>=0)ccPick(-1,true);else{var w=0;for(var i=0;i<PX.captions.length;i++){if(PX.captions[i].lang===prefs.captions){w=i;break;}}ccPick(w,true);}}});
+// A video that freezes while it should play (the engine does not always restart after running out of
+// buffered data) is nudged the way a person would: pause, play. Not after the user paused, while
+// seeking, or at the end of the quick-start part (that one waits for the full file on purpose).
+function unstick(v){
+  var lastT=-1,still=0,kicks=0;
+  setInterval(function(){
+    if(v.paused||v.ended||v.seeking||!v.src||(v.__userPaused&&Date.now()-v.__userPaused<4000)){still=0;lastT=v.currentTime;return;}
+    if(Math.abs(v.currentTime-lastT)<0.05){still++;}else{still=0;kicks=0;}
+    lastT=v.currentTime;
+    if(still>=3&&kicks<4&&!(part&&v.duration&&v.currentTime>v.duration-0.7)){
+      kicks++;still=0;note('stall at '+v.currentTime.toFixed(1)+'s of '+(v.duration||0).toFixed(1)+', ready '+v.readyState+', net '+v.networkState+', partial '+part+', kick '+kicks);try{v.pause();var p=v.play();if(p&&p.catch)p.catch(function(){});}catch(x){}}
+  },1000);
+}
 function extras(v){
+  unstick(v);
   v.loop=prefs.loop;
   if((PX.chapters&&PX.chapters.length)||segs.length)v.setAttribute('data-marks',marks());
   v.addEventListener('seeked',function(){if(selfSeek){selfSeek=false;return;}segs.forEach(function(g){if(v.currentTime<g.s-1)g.undone=false;});});
