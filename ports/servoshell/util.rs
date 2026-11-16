@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: small helpers shared by several modules (base64 and random codes).
+//! Pteron: small helpers shared by several modules (base64, random codes, private temp folder).
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -39,20 +39,59 @@ pub(crate) fn b64_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// 32 hex digits that cannot be guessed (random per process, mixed with the clock).
+/// 32 hex digits that cannot be guessed (from the system's secure random source).
 pub(crate) fn random_token() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    (0..2)
-        .map(|_| {
-            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-            hasher.write_u128(nanos);
-            format!("{:016x}", hasher.finish())
-        })
-        .collect()
+    use ring::rand::SecureRandom;
+    let mut bytes = [0u8; 16];
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
+        // Practically never; still unguessable from outside the process.
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+        bytes[..8].copy_from_slice(&hasher.finish().to_le_bytes());
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A folder for Pteron's temporary files that other users of the computer cannot reach.
+/// Windows' temp folder is already per user; on Linux the shared `/tmp` is not, so
+/// `~/.cache/Pteron/tmp` (only the owner may enter) is used instead.
+pub(crate) fn private_temp(name: &str) -> std::path::PathBuf {
+    #[cfg(windows)]
+    return std::env::temp_dir().join(name);
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let base = dirs::cache_dir()
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("pteron-{}", unsafe { libc::getuid() })))
+            .join("Pteron")
+            .join("tmp");
+        let _ = std::fs::create_dir_all(&base);
+        let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+        base.join(name)
+    }
+}
+
+/// Linux: makes Pteron's folders (settings, history, cookies, saved pages) owner-only, so other
+/// users of the same computer cannot read them even where home folders are open to everyone.
+/// Windows' own folders are already per user.
+pub(crate) fn lock_down_folders() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let app = "Pteron";
+        let folders = [
+            dirs::config_dir().map(|d| d.join(app)),
+            dirs::data_dir().map(|d| d.join(app)),
+            dirs::cache_dir().map(|d| d.join(app)),
+            dirs::config_dir().map(|d| d.join("servo")),
+            dirs::data_dir().map(|d| d.join("servo")),
+        ];
+        for folder in folders.into_iter().flatten() {
+            let _ = std::fs::create_dir_all(&folder);
+            let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
+        }
+    }
 }
 
 /// 16 hex digits identifying `text` (FNV-1a), for file and page names.
@@ -66,6 +105,22 @@ pub(crate) fn fnv_hex(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokens_are_random_and_long() {
+        let (a, b) = (random_token(), random_token());
+        assert!(a.len() == 32 && a != b && a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_temp_is_only_for_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = private_temp("pteron_test_private");
+        assert!(!dir.starts_with("/tmp"));
+        let mode = std::fs::metadata(dir.parent().unwrap()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
 
     #[test]
     fn base64_round_trips_and_matches_known_values() {

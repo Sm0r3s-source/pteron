@@ -20,6 +20,10 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 **Browsing**
 - Sidebar with tabs, pinned tabs, bookmarks (one folder level), history and downloads
 - Tabs sleep after a while and wake when clicked; session restore brings tabs back asleep
+- **Split view**: right-click a tab, **Show beside the current tab**; drag the bar between the two pages
+  (double-click it to share the space evenly). Both pages stay awake while they are on screen
+- Right-click menu on tabs: reload, duplicate, pin, **Keep awake** (the tab never goes to sleep, for a
+  page that must stay connected), split view, open in the default browser, close other tabs or the ones after it
 - Find in page, reading mode (the **Aa** button), popup blocking
 - Address bar shortcuts: `g`, `ddg`, `yt`, `w`, `gh`, `maps`, `r`, and `i` for pictures
   (for example `yt lofi`, `i red car`)
@@ -31,6 +35,8 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 **Make it yours**
 - Settings, **Layout & buttons**: Pteron's sidebar, or tabs on top in the style of Chrome, Firefox, Opera or
   Opera GX (the Opera styles add a bar of shortcuts down the left side); each comes with matching colours
+- Pteron draws its own window top: the tabs (or the sidebar) hold the minimize, maximize and close
+  buttons, drag empty space to move the window, the edges resize it; the system title bar is a setting away
 - Sidebar on the left or right and as wide as you like; interface size (75 to 175%), compact or roomy spacing,
   corner roundness; choose which buttons show; site icons and close buttons on tabs; a bookmarks bar
 - Settings, Appearance, **Theme editor**: start from any theme and change every colour
@@ -163,8 +169,98 @@ Things that carry some risk, said plainly:
 - **Plume** talks to YouTube through the interface YouTube's own apps use, not an official public API. It can stop
   working whenever YouTube changes something, and saving videos or songs may be against YouTube's terms or the law
   where you live. That is yours to judge.
-- **It is one person's test software** on an engine that is still young: no private window, no extensions, and no
-  security review. Do not make it the only browser you rely on for banking or work.
+- **It is one person's test software** on an engine that is still young: no private window and no extensions.
+  Do not make it the only browser you rely on for banking or work.
+
+## Security
+
+Build 67 was a security pass over Pteron's own code. What was found and fixed:
+
+- **Web pages could read Pteron's internal pages.** A plain http page, or a sandboxed frame inside one, could fetch
+  `servo:newtab` and read your shortcuts, bookmarks and most visited sites. Internal pages now only load as a
+  page you open yourself; web pages can neither fetch them nor show them in a frame.
+- **The bad-certificate page could be used to trust any certificate.** Servo's page offered "allow this
+  certificate" and carried a secret that the failing site's own scripts could read. That button and the secret
+  are gone; a site with a bad certificate now gets an error page with a Go back button.
+- **Frames could fake password prompts.** The password helper's messages are now marked with a code that changes
+  every run, and saved passwords are only filled into the top page of the exact site they were saved for, over
+  https (or http on your own computer).
+- **Permission prompts** (location, camera, microphone, notifications) now name the site asking.
+- **Full screen:** when a page goes full screen, Pteron says which site did it and that Esc leaves.
+- **JavaScript engine** updated to SpiderMonkey 153.6 (from 153.3), which carries Mozilla's security fixes
+  for those versions.
+- **Linux: temporary files** (updates and video pieces) were kept in the shared `/tmp` folder, where another
+  user of the same computer could swap them before Pteron used them. They now go to `~/.cache/Pteron/tmp`,
+  which only you can open.
+- **Downloads:** many more file types that can run code now need the extra confirmation (`.js`, `.iso`,
+  `.chm`, `.cpl`, `.url` and others), and file names can no longer hide their real type with text-flipping
+  characters (`photo‮gpj.exe` shown as `photoexe.jpg`).
+- **Compatibility tab:** the system engine's own check for harmful sites and downloads (SmartScreen) was
+  switched off to save memory; it is on again. Pop-ups there open only web addresses.
+- **Off for good:** two experimental engine features that never ask first, reading the clipboard
+  (`navigator.clipboard.readText`) and taking over `mailto:` links, stay off even with "Experimental web
+  features" on.
+- **Smaller things:** random codes come from the system's secure random source; the "Check this page"
+  report can no longer be faked by a page; new tab tiles only link to web addresses.
+- **Fake pages in the address:** a web page can no longer send you to a `data:` address (a whole fake
+  sign-in page packed into the address) or to a file on your computer.
+- **Dialogs:** alert, confirm and prompt boxes say which site they come from, frames from another site
+  can no longer open them over the page (as the web standard says), and from a page's second box on you
+  can stop it opening more. The sign-in box shows look-alike addresses in their real `xn--` form.
+- **Address bar:** a pasted `javascript:` address is searched for instead of run in the open page (the
+  "paste this to get free ..." trick).
+- **Downloads:** one click can start at most three downloads in ten seconds.
+- **Linux:** Pteron's folders (settings, history, cookies) are now readable only by you.
+- **SameSite cookies:** Servo sent every cookie with every request, so the usual defence against
+  cross-site request forgery (`SameSite=Lax` and `Strict` cookies) did nothing: another site could
+  submit a form to your bank with you signed in. Pteron now follows `SameSite`; cookies without it work
+  as before, as in Firefox and Safari.
+- **Your home network:** a site on the internet can no longer make Pteron send requests into your
+  computer or home network (your router at 192.168.1.1, a printer, programs listening on `localhost`).
+  Pages on your own network are not limited.
+- **Timers:** page timers are now 100 microseconds coarse (was 10), as in Chrome and Firefox for most
+  pages. Pteron runs every site in one process, so precise timers would make Spectre-style attacks easier.
+- **Pages can no longer** move or resize the Pteron window, or open a file chooser without a click.
+- **Programs over http:** program files are only downloaded over https (or from your own network).
+- **Blocked frames:** a frame blocked by the ad blocker or the rules above left the page "loading"
+  forever; it now gets an empty page.
+
+- **Libraries:** a check of all Rust libraries against the RustSec advisory database found 16 known holes;
+  15 are fixed by newer versions (among them rustls and webpki, which handle every https connection,
+  zstd and rsa). The one left (SQLite inside the cache library) needs crafted files placed in your own
+  profile folder. GitHub now runs this check on every push and once a week.
+- **Dangerous sites:** Pteron warns before known phishing and malware sites and loads nothing from them
+  (free lists from the malware-filter project: URLhaus, PhishTank, OpenPhish and others; refreshed weekly
+  and checked on your computer, so the sites you visit are not sent anywhere). On by default.
+- **DNS rebinding:** a site name that pointed to the internet is not allowed to switch to an address in
+  your home network (the trick that gets around the home network block above). WebSockets get the same
+  checks.
+- **Windows Hello before filling passwords** (Settings, Passwords, off by default): Windows asks for your
+  PIN, fingerprint or face before a saved password is filled; one confirmation counts for five minutes.
+
+**Block third-party cookies** (Settings, Privacy & data, off by default) sends no cookies with requests
+that other sites cause (frames, pictures and scripts embedded from elsewhere).
+
+**Strict security** (Settings, Privacy & data, off by default) runs JavaScript without its speed-up
+compiler (JIT), where most attacks on browser engines happen, like Edge's strict mode. Heavy scripts get
+slower and WebAssembly stops working.
+
+Checked and already fine: Pteron's local video helper only answers addresses with a secret code; local
+files opened in Pteron cannot read other files; pop-ups need a click; updates need a SHA-256 signed with the author's key and never go back to an older build;
+downloads get Windows' "came from the internet" mark, dangerous file types are blocked and every download is
+confirmed; bookmark import drops `javascript:` links; developer tools are off unless Pteron is started with
+`--devtools`.
+
+What is not fixed, said plainly:
+
+- **No process sandbox.** Pages run inside Pteron's own process, not in locked-down child processes as in Chrome or
+  Firefox. A bug in the engine that a page can exploit reaches everything Pteron can reach.
+- **The installer is not code-signed** (see above). Signing with Azure Artifact Signing is prepared and
+  switches on once an account is set up.
+- **Revoked certificates are not checked**, and Windows video still uses Servo's GStreamer 1.22.8 (2023);
+  moving to GStreamer 1.28 is planned.
+
+Found a security problem? Please report it privately, as [SECURITY.md](SECURITY.md) explains.
 
 ## Building
 
@@ -200,8 +296,16 @@ Pteron also makes small changes in Servo's own files (`components/config/prefs.r
 `components/net/http_loader.rs`, `components/servo/servo.rs`, the GStreamer media backend, the
 media controls, the memory allocator in `components/allocator/`, a "collect garbage" message in
 `components/constellation/` and `components/shared/constellation/`, the animation frame rate in
-`components/paint/refresh_driver.rs`, and the garbage collection of background pages in
-`components/script/event_loop/script_thread.rs`). They are published here under
+`components/paint/refresh_driver.rs`, the garbage collection of background pages in
+`components/script/event_loop/script_thread.rs`, placing a page in part of the window for split view in
+`components/paint/` and `components/servo/webview.rs`, the newer JavaScript engine in `Cargo.toml`, the
+bad-certificate page in `components/default-resources/`, and blocking dialogs from frames of other sites in
+`components/script/dom/window/window.rs`, SameSite cookies and third-party cookie blocking in
+`components/net/http_loader.rs`, coarser timers in `components/script/dom/performance/`, and file
+choosers only after a click in `components/script/dom/html/form_controls/htmlinputelement.rs`, the DNS
+rebinding guard in `components/net/connector.rs` and `components/net/websocket_loader.rs`, and the move to
+the fixed `rsa` 0.10 in `components/script/dom/webcrypto/subtlecrypto/rsa_common.rs`). They are
+published here under
 the MPL-2.0, like the rest of Servo.
 
 ## Known problems

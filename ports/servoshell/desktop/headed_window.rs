@@ -73,6 +73,10 @@ pub struct HeadedWindow {
     fullscreen_from_document: Cell<bool>,
     /// Pteron: the window system says the window is completely covered.
     occluded: Cell<bool>,
+    /// Pteron: the tab whose page had the mouse last (split view has two pages on screen).
+    pointer_webview: Cell<Option<WebViewId>>,
+    /// Pteron: the mouse is over the window's edge and shows a resize pointer.
+    resize_pointer: Cell<bool>,
     device_pixel_ratio_override: Option<f32>,
     xr_window_poses: RefCell<Vec<Rc<XRWindowPose>>>,
     modifiers_state: Cell<ModifiersState>,
@@ -99,6 +103,9 @@ pub struct HeadedWindow {
     last_title: RefCell<String>,
     /// The current set of open dialogs.
     dialogs: RefCell<HashMap<WebViewId, Vec<Dialog>>>,
+    /// Pteron: how many alert/confirm/prompt boxes each tab has shown, and whether the user said
+    /// "no more" (a page that opens box after box cannot lock the window).
+    page_dialogs: RefCell<HashMap<WebViewId, (u32, Rc<Cell<bool>>)>>,
     /// The [`EmbedderControlId`] of the currently showing [`InputMethod`] interfaces,
     /// if one is showing.
     visible_input_method: Cell<Option<EmbedderControlId>>,
@@ -203,6 +210,8 @@ impl HeadedWindow {
             fullscreen: Cell::new(false),
             fullscreen_from_document: Cell::new(false),
             occluded: Cell::new(false),
+            pointer_webview: Cell::new(None),
+            resize_pointer: Cell::new(false),
             inner_size: Cell::new(inner_size),
             screen_size,
             device_pixel_ratio_override: servoshell_preferences.device_pixel_ratio_override,
@@ -216,6 +225,7 @@ impl HeadedWindow {
             rendering_context,
             last_title: RefCell::new(String::from(INITIAL_WINDOW_TITLE)),
             dialogs: Default::default(),
+            page_dialogs: Default::default(),
             visible_input_method: Default::default(),
             last_mouse_position: Default::default(),
         })
@@ -451,7 +461,7 @@ impl HeadedWindow {
         self.winit_window.set_ime_allowed(true);
         self.winit_window.set_ime_cursor_area(
             LogicalPosition::new(
-                position.min.x + (sidebar::left_inset() as i32),
+                position.min.x + (sidebar::popup_inset() as i32),
                 position.min.y + (self.toolbar_height().0 as i32),
             ),
             LogicalSize::new(
@@ -636,6 +646,17 @@ impl HeadedWindow {
                 // the GUI, and present the new frame.
                 self.winit_window.request_redraw();
             },
+            // Pteron: with its own window top, the outer edge of the window resizes it.
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if self.resize_direction().is_some() => {
+                if let Some(direction) = self.resize_direction() {
+                    let _ = self.winit_window.drag_resize_window(direction);
+                }
+                consumed = true;
+            },
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Forward,
@@ -738,7 +759,51 @@ impl HeadedWindow {
             },
         }
 
-        if !consumed && let Some(webview) = window.active_webview() {
+        // Pteron: the mouse pointer shows where the window can be resized.
+        if let WindowEvent::CursorMoved { .. } = event {
+            use winit::window::{CursorIcon, ResizeDirection};
+            let direction = self.resize_direction();
+            if let Some(direction) = direction {
+                self.winit_window.set_cursor(match direction {
+                    ResizeDirection::East | ResizeDirection::West => CursorIcon::EwResize,
+                    ResizeDirection::North | ResizeDirection::South => CursorIcon::NsResize,
+                    ResizeDirection::NorthEast | ResizeDirection::SouthWest => CursorIcon::NeswResize,
+                    ResizeDirection::NorthWest | ResizeDirection::SouthEast => CursorIcon::NwseResize,
+                });
+            } else if self.resize_pointer.get() {
+                self.winit_window.set_cursor(CursorIcon::Default);
+            }
+            self.resize_pointer.set(direction.is_some());
+        }
+
+        if !consumed && let Some(mut webview) = window.active_webview() {
+            // Pteron: in split view the mouse works on the page under it, and a click there
+            // makes that page the active tab.
+            let pointer_x = match event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    Some(position.x as f32 - sidebar::left_inset() * self.hidpi_scale_factor().0)
+                },
+                WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } => {
+                    Some(self.webview_relative_mouse_point.get().x)
+                },
+                _ => None,
+            };
+            if let Some(under) = pointer_x.and_then(|x| window.webview_at(x)) &&
+                under.id() != webview.id()
+            {
+                if matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, .. }) {
+                    window.activate_webview(under.id());
+                }
+                webview = under;
+            }
+            // The page the mouse just left is told so (it drops its hover effects).
+            if pointer_x.is_some() &&
+                let Some(left) = self.pointer_webview.replace(Some(webview.id())) &&
+                left != webview.id() &&
+                let Some(left) = window.webview_by_id(left)
+            {
+                left.notify_input_event(InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()));
+            }
             match event {
                 WindowEvent::KeyboardInput { event, .. } => {
                     self.handle_keyboard_input(state, &window, event)
@@ -901,6 +966,15 @@ impl HeadedWindow {
     pub(crate) fn is_fullscreen_from_document(&self) -> bool {
         self.fullscreen_from_document.get()
     }
+
+    /// Pteron: where the mouse is, if that is an edge that resizes the window (only with
+    /// Pteron's own window top, and not while maximized or in full screen).
+    fn resize_direction(&self) -> Option<winit::window::ResizeDirection> {
+        if self.winit_window.is_maximized() || self.fullscreen.get() {
+            return None;
+        }
+        self.gui.borrow().resize_direction(self.last_mouse_position.get()?)
+    }
 }
 
 impl PlatformWindow for HeadedWindow {
@@ -1054,6 +1128,10 @@ impl PlatformWindow for HeadedWindow {
 
     fn set_cursor(&self, cursor: Cursor) {
         use winit::window::CursorIcon;
+        // Pteron: the window's edge shows the resize pointer, whatever the page under it says.
+        if self.resize_pointer.get() {
+            return;
+        }
 
         let winit_cursor = match cursor {
             Cursor::Default => CursorIcon::Default,
@@ -1200,7 +1278,7 @@ impl PlatformWindow for HeadedWindow {
                 self.add_dialog(webview_id, Dialog::new_file_dialog(file_picker));
             },
             EmbedderControl::SimpleDialog(simple_dialog) => {
-                self.add_dialog(webview_id, Dialog::new_simple_dialog(simple_dialog));
+                self.add_dialog(webview_id, Dialog::new_simple_dialog(simple_dialog, String::new(), None));
             },
             EmbedderControl::ContextMenu(prompt) => {
                 let offset = self.gui.borrow().toolbar_height();
@@ -1226,10 +1304,24 @@ impl PlatformWindow for HeadedWindow {
         self.add_dialog(webview_id, Dialog::new_device_selection_dialog(request));
     }
 
-    fn show_permission_dialog(&self, webview_id: WebViewId, permission_request: PermissionRequest) {
+    fn show_page_dialog(&self, webview_id: WebViewId, dialog: servo::SimpleDialog, site: String) {
+        let block = {
+            let mut counts = self.page_dialogs.borrow_mut();
+            let (count, blocked) = counts.entry(webview_id).or_insert_with(|| (0, Rc::new(Cell::new(false))));
+            if blocked.get() {
+                // Dropped unanswered: the page gets the "Cancel" answer.
+                return;
+            }
+            *count += 1;
+            (*count > 1).then(|| blocked.clone())
+        };
+        self.add_dialog(webview_id, Dialog::new_simple_dialog(dialog, site, block));
+    }
+
+    fn show_permission_dialog(&self, webview_id: WebViewId, permission_request: PermissionRequest, site: String) {
         self.add_dialog(
             webview_id,
-            Dialog::new_permission_request_dialog(permission_request),
+            Dialog::new_permission_request_dialog(permission_request, site),
         );
     }
 

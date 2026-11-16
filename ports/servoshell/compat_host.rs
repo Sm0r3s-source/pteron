@@ -36,6 +36,9 @@ struct Entry {
     /// (this runs every frame): on screen, its area in pixels, low memory.
     shown: bool,
     bounds: Option<(i32, i32, u32, u32)>,
+    /// The holes cut for Pteron's menus over the view, in pixels from its corner (the last
+    /// number is how round their corners are).
+    holes: Vec<[i32; 5]>,
     low: bool,
     /// When the engine was last asked for its browser name.
     agent_asked: Option<Instant>,
@@ -76,9 +79,10 @@ pub(crate) struct Host {
 #[cfg(windows)]
 fn browser_args() -> String {
     // Measured on a Cloudflare page: about 280 MB without the saving flags, about 170 MB with them,
-    // so they are always on.
+    // so they are always on. (SmartScreen, the system engine's check for harmful sites and
+    // downloads, stays on.)
     let mut args = String::from(
-        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+        "--disable-features=msWebOOUI,msPdfOOUI \
          --enable-low-end-device-mode --renderer-process-limit=2 --disable-background-networking",
     );
     if crate::pteron::settings().compat_tab_no_gpu {
@@ -272,6 +276,7 @@ impl Host {
         live: &[WebViewId],
         active: Option<(WebViewId, &url::Url)>,
         area: Option<egui::Rect>,
+        popups: (&[egui::Rect], f32),
         points_to_pixels: f32,
         typing: bool,
     ) {
@@ -332,11 +337,13 @@ impl Host {
                 flags: Default::default(),
                 shown: false,
                 bounds: None,
+                holes: Vec::new(),
                 low: false,
                 agent_asked: None,
             });
             entry.hidden_since = None;
             self.show(window, id, area, points_to_pixels);
+            self.cut_holes(id, area, popups, points_to_pixels);
         }
         let keep = Duration::from_secs(crate::memsaver::tab_sleep_secs(KEEP_HIDDEN_SECS));
         for (_, entry) in self.entries.iter_mut().filter(|(id, _)| Some(**id) != shown_id) {
@@ -344,6 +351,51 @@ impl Host {
         }
         self.clean_up_engine();
     }
+
+    /// Pteron's menus are drawn in its own window, under the system's view: on Windows the view
+    /// gets holes where they are, so they show and the page stays on screen around them.
+    #[cfg(all(pteron_wry, windows))]
+    fn cut_holes(&mut self, id: WebViewId, area: egui::Rect, (popups, corner): (&[egui::Rect], f32), scale: f32) {
+        use windows_sys::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, RGN_DIFF, SetWindowRgn};
+        use wry::WebViewExtWindows;
+        let Some(entry) = self.entries.get_mut(&id) else { return };
+        let Some(view) = &entry.view else { return };
+        let pixel = |value: f32| (value * scale).round() as i32;
+        // The holes have the menus' round corners, so no corner of the window behind shows.
+        let holes: Vec<[i32; 5]> = popups
+            .iter()
+            .map(|r| {
+                let [left, top] = [pixel(r.min.x - area.min.x), pixel(r.min.y - area.min.y)];
+                [left, top, pixel(r.max.x - area.min.x), pixel(r.max.y - area.min.y), pixel(corner * 2.0)]
+            })
+            .collect();
+        if holes == entry.holes {
+            return;
+        }
+        let hwnd = view.hwnd().0 as windows_sys::Win32::Foundation::HWND;
+        // SAFETY: the regions are made, combined and handed over (or deleted) here; once given to
+        // SetWindowRgn a region belongs to the system.
+        unsafe {
+            if holes.is_empty() {
+                SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+            } else {
+                let region = CreateRectRgn(0, 0, pixel(area.width()), pixel(area.height()));
+                for [left, top, right, bottom, round] in &holes {
+                    // (A round rectangle region leaves out its right and bottom edge.)
+                    let hole = CreateRoundRectRgn(*left, *top, *right + 1, *bottom + 1, *round, *round);
+                    CombineRgn(region, region, hole, RGN_DIFF);
+                    DeleteObject(hole);
+                }
+                if SetWindowRgn(hwnd, region, 1) == 0 {
+                    DeleteObject(region);
+                }
+            }
+        }
+        entry.holes = holes;
+    }
+
+    #[cfg(not(all(pteron_wry, windows)))]
+    fn cut_holes(&mut self, _: WebViewId, _: egui::Rect, _: (&[egui::Rect], f32), _: f32) {}
 
     #[cfg(pteron_wry)]
     fn show(&mut self, window: &winit::window::Window, id: WebViewId, area: egui::Rect, scale: f32) {
@@ -471,6 +523,14 @@ impl Host {
                 // (The page reports only changes.) Draw a frame so the sidebar opens or closes now.
                 POINTER.store(state, Relaxed);
                 crate::window::repaint_after(Duration::ZERO);
+            })
+            // Pop-ups only for web addresses (not data:, file:, javascript: or other programs).
+            .with_new_window_req_handler(|next, _| {
+                if next.starts_with("http://") || next.starts_with("https://") {
+                    wry::NewWindowResponse::Allow
+                } else {
+                    wry::NewWindowResponse::Deny
+                }
             })
             .with_navigation_handler(move |next| {
                 if next.starts_with("http://") || next.starts_with("https://") {

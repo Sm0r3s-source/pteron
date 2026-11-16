@@ -60,8 +60,10 @@ fn colors(ui: &egui::Ui, style: Style) -> Colors {
     let v = ui.visuals();
     let text = v.text_color();
     let lum = |c: Color32| (0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32) / 255.0;
-    // The plain looks have almost the same panel and card colours: darken the tab strip.
-    let (strip, bar) = if (lum(v.panel_fill) - lum(v.faint_bg_color)).abs() < 0.03 {
+    // The plain looks have almost the same panel and card colours (or a see-through card colour,
+    // which would let the window behind show through the toolbar): darken the tab strip.
+    let plain = v.faint_bg_color.a() < 255 || (lum(v.panel_fill) - lum(v.faint_bg_color)).abs() < 0.03;
+    let (strip, bar) = if plain {
         let strip = if v.dark_mode {
             tinted(v.panel_fill, Color32::BLACK, 0.35)
         } else {
@@ -140,9 +142,11 @@ fn tab(
     active: bool,
     sleeping: bool,
     pinned: bool,
+    marks: Option<&sidebar::TabRow>,
 ) -> (egui::Response, bool) {
     let response = ui.interact(rect, id, if sleeping { Sense::click() } else { Sense::click_and_drag() });
-    let hovered = response.hovered();
+    // (Over the tab or its close button: the button sits on top of the tab and takes the hover.)
+    let hovered = ui.rect_contains_pointer(rect);
     let r = look.roundness as u8;
     let painter = ui.painter().clone();
     let shape = match style {
@@ -202,7 +206,7 @@ fn tab(
     }
     let show_close = !sleeping && rect.width() > 72.0 && (look.close_always || hovered || active);
     let close_rect = Rect::from_center_size(pos2(inner.max.x - 8.0, center_y), vec2(20.0, 20.0));
-    let text_right = if show_close { close_rect.min.x - 4.0 } else { inner.max.x };
+    let mut text_right = if show_close { close_rect.min.x - 4.0 } else { inner.max.x };
     let color = if sleeping {
         c.weak
     } else if active {
@@ -210,6 +214,9 @@ fn tab(
     } else {
         tinted(c.text, c.strip, 0.25)
     };
+    if let Some(row) = marks {
+        text_right -= sidebar::tab_marks(&painter, pos2(text_right, center_y), row, color);
+    }
     let text = if sleeping { format!("zZ  {label}") } else { label.to_string() };
     painter
         .with_clip_rect(Rect::from_min_max(pos2(text_x, shape.min.y), pos2(text_right, shape.max.y)))
@@ -236,9 +243,15 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
         .frame(Frame::NONE.fill(c.strip))
         .show_inside(ui, |ui| {
             let full = ui.max_rect();
+            // Pteron's own window top: the strip moves the window, and holds its buttons.
+            let mut right = full.max.x;
+            if model.own_titlebar {
+                sidebar::drag_area(ui, full, actions);
+                right -= sidebar::window_buttons(ui, full.right_top(), vec2(44.0, height), actions);
+            }
             let pinned = model.tabs.iter().filter(|t| t.pinned).count() + model.sleeping.iter().filter(|t| t.pinned).count();
             let normal = model.tabs.len() + model.sleeping.len() - pinned;
-            let end = full.max.x - 40.0;
+            let end = right - 40.0;
             let spare = end - full.min.x - 8.0 - 36.0 - pinned as f32 * 44.0;
             let width = if normal == 0 { 0.0 } else { (spare / normal as f32).clamp(56.0, 240.0) };
             let mut x = full.min.x + 8.0;
@@ -252,7 +265,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                     let rect = Rect::from_min_size(pos2(x, full.min.y), vec2(w, height));
                     x += w;
                     let (response, closed) =
-                        tab(ui, style, c, look, rect, Id::new(("pteron_top_tab", index)), &t.label, t.favicon, t.active, false, t.pinned);
+                        tab(ui, style, c, look, rect, Id::new(("pteron_top_tab", index)), &t.label, t.favicon, t.active, false, t.pinned, Some(t));
                     if response.drag_started() {
                         ui.memory_mut(|memory| memory.data.insert_temp(Id::new(DRAG_KEY), index));
                     }
@@ -271,7 +284,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                         actions.push(Action::Activate(index));
                     }
                     let response = response.on_hover_text(&t.label);
-                    response.context_menu(|ui| sidebar::tab_menu(ui, index, t.pinned, actions));
+                    response.context_menu(|ui| sidebar::tab_menu(ui, index, model, actions));
                 }
                 for (index, t) in model.sleeping.iter().enumerate().filter(|(_, t)| t.pinned == section_pinned) {
                     if x + w > end + 1.0 {
@@ -280,7 +293,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                     let rect = Rect::from_min_size(pos2(x, full.min.y), vec2(w, height));
                     x += w;
                     let (response, _) =
-                        tab(ui, style, c, look, rect, Id::new(("pteron_top_sleeping", index)), &t.label, None, false, true, t.pinned);
+                        tab(ui, style, c, look, rect, Id::new(("pteron_top_sleeping", index)), &t.label, None, false, true, t.pinned, None);
                     if response.middle_clicked() {
                         actions.push(Action::CloseSleeping(index));
                     } else if response.clicked() {
@@ -296,7 +309,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                 actions.push(Action::NewTab);
             }
             // Every tab in a list, for when they do not all fit.
-            let list = Rect::from_center_size(pos2(full.max.x - 22.0, plus.center().y), vec2(28.0, 28.0));
+            let list = Rect::from_center_size(pos2(right - 22.0, plus.center().y), vec2(28.0, 28.0));
             let response = icon_at(ui, list, Icon::Chevron, c, "pteron_top_list").on_hover_text("List all tabs");
             let _ = Popup::menu(&response).show(|ui| {
                 ui.set_min_width(260.0);
@@ -483,7 +496,7 @@ fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, model: &Model, row: f32, actions
             let rect = ui.max_rect();
             ui.painter().hline(rect.x_range().expand(8.0), rect.max.y - 0.5, Stroke::new(1.0_f32, c.line));
             ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().item_spacing.x = 12.0;
                 // Folders look like the other entries: no box until the mouse is over them.
                 let widgets = &mut ui.visuals_mut().widgets;
                 widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;

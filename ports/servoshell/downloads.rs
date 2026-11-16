@@ -37,8 +37,12 @@ const DOWNLOAD_EXTENSIONS: &[&str] = &[
 /// Extensions that can run code. They need an extra confirmation and are never opened
 /// from Pteron.
 const DANGEROUS_EXTENSIONS: &[&str] = &[
-    "exe", "msi", "msix", "appx", "bat", "cmd", "ps1", "vbs", "scr", "lnk", "hta", "dll", "msp",
-    "reg", "jar", "apk", "sh", "bin", "pkg", "dmg", "deb", "rpm",
+    "exe", "msi", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "bat", "cmd", "com", "pif",
+    "cpl", "msc", "ps1", "psm1", "psd1", "ps1xml", "vbs", "vbe", "js", "jse", "wsf", "wsh", "wsc", "ws",
+    "scr", "lnk", "url", "scf", "hta", "chm", "dll", "ocx", "sys", "drv", "msp", "mst", "reg", "inf",
+    "jar", "jnlp", "application", "appref-ms", "gadget", "settingcontent-ms", "library-ms", "search-ms",
+    "diagcab", "xll", "iso", "img", "vhd", "vhdx", "apk", "sh", "run", "bin", "elf", "appimage",
+    "desktop", "pkg", "dmg", "deb", "rpm", "py", "pyw", "pyz",
 ];
 
 const RESERVED_NAMES: &[&str] = &[
@@ -85,7 +89,7 @@ static NOTICE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
 const NOTICE_SECS: u64 = 5;
 
-fn set_notice(text: String) {
+pub(crate) fn set_notice(text: String) {
     *NOTICE.lock_ok() = Some((text, Instant::now()));
 }
 
@@ -132,6 +136,8 @@ pub(crate) fn sanitize_file_name(raw: &str) -> String {
         .map(|c| match c {
             '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
             c if (c as u32) < 32 => '_',
+            // Characters that flip or hide text: "photo\u{202e}gpj.exe" would show as "photoexe.jpg".
+            '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' => '_',
             c => c,
         })
         .collect();
@@ -260,10 +266,17 @@ fn begin_named(url: &str, name: String, convert: Option<crate::mp3::Tags>) {
         set_notice(format!("Cannot create the Downloads folder: {error}"));
         return;
     }
+    let dangerous = is_dangerous(&name);
+    // Pteron: programs only over https; over plain http anyone on the network could swap them.
+    // (Your own network, such as a NAS, is fine.)
+    let insecure = url.starts_with("http://") && !Url::parse(url).is_ok_and(|u| crate::privacy::is_private_address(&u));
+    if dangerous && insecure {
+        set_notice(format!("{name} was not downloaded: programs are only downloaded over a secure (https) connection."));
+        return;
+    }
     let path = unique_path(&dir, &name);
     let mut part = path.clone().into_os_string();
     part.push(".pteronpart");
-    let dangerous = is_dangerous(&name);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let item = Item {
         id,
@@ -290,6 +303,19 @@ fn begin_named(url: &str, name: String, convert: Option<crate::mp3::Tags>) {
         set_notice(format!("Downloading {name}"));
         spawn(id, cancel);
     }
+}
+
+/// Pteron: one click may start a few downloads, not hundreds (at most 3 in 10 seconds from pages).
+pub(crate) fn page_may_download() -> bool {
+    static RECENT: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
+    let mut recent = RECENT.lock_ok();
+    recent.retain(|at| at.elapsed() < std::time::Duration::from_secs(10));
+    if recent.len() >= 3 {
+        set_notice("Download blocked: the page tried to start too many at once.".to_string());
+        return false;
+    }
+    recent.push(std::time::Instant::now());
+    true
 }
 
 /// A download was refused because it did not follow a click or key press.
@@ -679,14 +705,29 @@ mod tests {
         assert_eq!(sanitize_file_name("CON.txt"), "_CON.txt");
         assert_eq!(sanitize_file_name("name. "), "name");
         assert!(sanitize_file_name(&"a".repeat(300)).chars().count() <= 130);
+        // A right-to-left mark cannot make "photo<RLO>gpj.exe" look like a picture.
+        assert_eq!(sanitize_file_name("photo\u{202e}gpj.exe"), "photo_gpj.exe");
+        assert!(is_dangerous(&sanitize_file_name("photo\u{202e}gpj.exe")));
     }
 
     #[test]
     fn dangerous_types() {
         assert!(is_dangerous("setup.EXE"));
         assert!(is_dangerous("run.ps1"));
+        assert!(is_dangerous("invoice.pdf.js") && is_dangerous("disk.iso") && is_dangerous("help.chm"));
         assert!(!is_dangerous("doc.pdf"));
         assert!(!is_dangerous("archive.zip"));
+    }
+
+    #[test]
+    fn programs_only_over_https_or_from_the_home_network() {
+        let state_of = |name: &str| snapshot().into_iter().find(|i| i.name == name).map(|i| i.state);
+        begin_named("http://evil.example/pt-test-a.exe", "pt-test-a.exe".into(), None);
+        assert_eq!(state_of("pt-test-a.exe"), None, "refused over plain http");
+        begin_named("https://good.example/pt-test-b.exe", "pt-test-b.exe".into(), None);
+        assert_eq!(state_of("pt-test-b.exe"), Some(State::Confirm));
+        begin_named("http://192.168.1.5/pt-test-c.exe", "pt-test-c.exe".into(), None);
+        assert_eq!(state_of("pt-test-c.exe"), Some(State::Confirm));
     }
 
     #[test]

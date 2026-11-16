@@ -24,6 +24,32 @@ use url::Url;
 
 const SAVE_PREFIX: &str = "__pteron_pw__";
 const FORM_MARK: &str = "__pteron_pwform__";
+
+/// A secret for this run, put into the page script's messages. Frames inside a page (an ad, say)
+/// can write to the same console but never get to run the script's reporting part, so they
+/// cannot fake a "save this login" or "fill a login here" message.
+fn token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        use ring::rand::SecureRandom;
+        let mut bytes = [0u8; 12];
+        let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
+fn save_prefix() -> String {
+    format!("{SAVE_PREFIX}{}", token())
+}
+
+fn form_mark() -> String {
+    format!("{FORM_MARK}{}", token())
+}
+
+/// The page script, with this run's secret in its messages.
+pub(crate) fn script() -> String {
+    SCRIPT.replace("P='__pteron_pw__'", &format!("P='{}'", save_prefix())).replace("F='__pteron_pwform__'", &format!("F='{}'", form_mark()))
+}
 const SAVE_WAIT: Duration = Duration::from_secs(120);
 const MAX_FIELD: usize = 256;
 const MAX_LOGINS: usize = 2000;
@@ -62,6 +88,8 @@ struct Login {
 #[derive(Debug, PartialEq)]
 struct Vault {
     enabled: bool,
+    /// Ask Windows (Hello: PIN, fingerprint or face) before a saved password is filled.
+    ask_windows: bool,
     never: Vec<String>,
     logins: Vec<Login>,
 }
@@ -73,7 +101,7 @@ impl Vault {
             .iter()
             .map(|l| json!({"host": l.host, "user": l.user, "pw": l.pw}))
             .collect();
-        serde_json::to_string_pretty(&json!({"enabled": self.enabled, "never": self.never, "logins": logins}))
+        serde_json::to_string_pretty(&json!({"enabled": self.enabled, "ask_windows": self.ask_windows, "never": self.never, "logins": logins}))
             .unwrap_or_default()
     }
 
@@ -82,6 +110,7 @@ impl Vault {
         let text_of = |x: &Value, key: &str| x.get(key).and_then(|s| s.as_str()).map(str::to_string);
         Some(Vault {
             enabled: v.get("enabled").and_then(|b| b.as_bool()).unwrap_or(true),
+            ask_windows: v.get("ask_windows").and_then(|b| b.as_bool()).unwrap_or(false),
             never: v
                 .get("never")
                 .and_then(|n| n.as_array())
@@ -104,7 +133,7 @@ impl Vault {
 
 impl Default for Vault {
     fn default() -> Self {
-        Vault { enabled: true, never: Vec::new(), logins: Vec::new() }
+        Vault { enabled: true, ask_windows: false, never: Vec::new(), logins: Vec::new() }
     }
 }
 
@@ -262,13 +291,13 @@ fn unprotect(blob: &str) -> Result<String, String> {
 /// Called for every console message. Returns true when it was one of ours (the message is then
 /// not logged, since it can hold a password). `page` is the address of the tab it came from.
 pub(crate) fn handle_console(page: Option<&Url>, message: &str) -> bool {
-    if let Some(json) = message.strip_prefix(SAVE_PREFIX) {
+    if let Some(json) = message.strip_prefix(&save_prefix()) {
         if let Some(page) = page {
             on_login_sent(page, json);
         }
         return true;
     }
-    if message.trim() == FORM_MARK {
+    if message.trim() == form_mark() {
         if let Some(page) = page {
             on_form_seen(page);
         }
@@ -404,11 +433,17 @@ pub(crate) fn dismiss_offer() {
 }
 
 /// The script that puts a login into the page.
-fn fill_script(user: &str, password: &str) -> String {
+fn fill_script(user: &str, password: &str, site: &str) -> String {
     let user = serde_json::to_string(user).unwrap_or_else(|_| "\"\"".into());
     let password = serde_json::to_string(password).unwrap_or_else(|_| "\"\"".into());
+    let site = serde_json::to_string(site).unwrap_or_else(|_| "\"\"".into());
+    // The page itself checks that it is still the site the login belongs to (it may have moved
+    // on in the moment between the click and the fill).
     format!(
-        "(function(u,p){{try{{function vis(e){{var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}}\
+        "(function(u,p,s){{try{{var h=location.hostname.toLowerCase().replace(/^www\\./,'')+(location.port?':'+location.port:'');\
+         var local=/^(localhost|127\\.0\\.0\\.1)(:|$)/.test(h);\
+         if(window!==window.top||h!==s||!(location.protocol==='https:'||(local&&location.protocol==='http:')))return;\
+         function vis(e){{var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}}\
          function set(el,v){{var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');\
          if(d&&d.set)d.set.call(el,v);else el.value=v;\
          el.dispatchEvent(new Event('input',{{bubbles:true}}));el.dispatchEvent(new Event('change',{{bubbles:true}}));}}\
@@ -416,13 +451,13 @@ fn fill_script(user: &str, password: &str) -> String {
          var root=pw.form||document,all=[].slice.call(root.querySelectorAll('input')),i=all.indexOf(pw);\
          if(u){{for(var k=i-1;k>=0;k--){{var e=all[k],t=(e.type||'text').toLowerCase();\
          if((t==='text'||t==='email'||t==='tel')&&vis(e)){{set(e,u);break;}}}}}}\
-         set(pw,p);}}catch(e){{}}}})({user},{password});"
+         set(pw,p);}}catch(e){{}}}})({user},{password},{site});"
     )
 }
 
 /// Start opening login number `index` (of those for the offered site) in the background.
 pub(crate) fn request_fill(index: usize) {
-    let (host, blob, user) = {
+    let (host, blob, user, ask) = {
         let mut state = STATE.lock_ok();
         let Some(host) = state.offer.take().map(|o| o.host) else { return };
         if state.busy {
@@ -430,17 +465,21 @@ pub(crate) fn request_fill(index: usize) {
         }
         let vault = state.vault.get_or_insert_with(load);
         let Some(login) = vault.logins.iter().filter(|l| l.host == host).nth(index).cloned() else { return };
+        let ask = vault.ask_windows;
         state.busy = true;
-        (host, login.pw, login.user)
+        (host, login.pw, login.user, ask)
     };
     std::thread::Builder::new()
         .name("pteron-passwords".into())
         .spawn(move || {
-            let result = unprotect(&blob);
+            let result = confirm_user(ask, &host).and_then(|()| unprotect(&blob));
             let mut state = STATE.lock_ok();
             state.busy = false;
             match result {
-                Ok(password) => state.ready = Some(Ready { host, script: fill_script(&user, &password) }),
+                Ok(password) => {
+                    let script = fill_script(&user, &password, &host);
+                    state.ready = Some(Ready { host, script })
+                },
                 Err(message) => state.message = Some((message, Instant::now())),
             }
         })
@@ -461,6 +500,72 @@ pub(crate) fn working() -> bool {
 }
 
 // ---------------------------------------------------------------- settings page
+
+/// When switched on, Windows asks for the user's PIN, fingerprint or face (Windows Hello) before a
+/// saved password is filled; a confirmation counts for five minutes.
+fn confirm_user(ask: bool, host: &str) -> Result<(), String> {
+    static CONFIRMED: Mutex<Option<Instant>> = Mutex::new(None);
+    if !ask || CONFIRMED.lock_ok().is_some_and(|at| at.elapsed() < Duration::from_secs(300)) {
+        return Ok(());
+    }
+    windows_hello(&format!("Pteron: fill your saved password for {host}"))?;
+    *CONFIRMED.lock_ok() = Some(Instant::now());
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_hello(message: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+    // The message goes in through standard input, so nothing in it is read as PowerShell.
+    const SCRIPT: &str = "$ErrorActionPreference='Stop';\
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime;\
+        $null=[Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime];\
+        $asTask=[System.WindowsRuntimeSystemExtensions].GetMethods()|Where-Object{$_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'}|Select-Object -First 1;\
+        function Wait-Op($op,$type){$t=$asTask.MakeGenericMethod($type).Invoke($null,@($op));$null=$t.Wait(-1);$t.Result};\
+        $msg=[Console]::In.ReadToEnd().Trim();\
+        $a=Wait-Op ([Windows.Security.Credentials.UI.UserConsentVerifier]::CheckAvailabilityAsync()) ([Windows.Security.Credentials.UI.UserConsentVerifierAvailability]);\
+        if(([string]$a) -ne 'Available'){'unavailable:'+$a;exit 0};\
+        $r=Wait-Op ([Windows.Security.Credentials.UI.UserConsentVerifier]::RequestVerificationAsync($msg)) ([Windows.Security.Credentials.UI.UserConsentVerificationResult]);\
+        'result:'+$r";
+    let mut child = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .map_err(|e| format!("Could not ask Windows to confirm it is you: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(message.as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let answer = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    match answer.as_str() {
+        "result:Verified" => Ok(()),
+        a if a.starts_with("unavailable:") => Err(
+            "Windows Hello (a PIN, fingerprint or face) is not set up, so Pteron cannot ask it is you. \
+             Set it up in Windows Settings, or switch the question off in Pteron's password settings."
+                .into(),
+        ),
+        "result:Canceled" => Err("Not filled: Windows did not confirm it is you.".into()),
+        _ => Err("Not filled: Windows could not confirm it is you.".into()),
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_hello(_message: &str) -> Result<(), String> {
+    Err("Saved passwords only work on Windows for now.".into())
+}
+
+pub(crate) fn asks_windows() -> bool {
+    with_vault(|v| v.ask_windows)
+}
+
+pub(crate) fn set_asks_windows(on: bool) {
+    with_vault(|v| v.ask_windows = on);
+    save_vault_now();
+}
 
 /// Saved passwords need Windows' own protection (DPAPI) for now, so elsewhere nothing is offered.
 pub(crate) fn enabled() -> bool {
@@ -523,7 +628,7 @@ mod tests {
 
     #[test]
     fn fill_script_is_quoted() {
-        let script = fill_script("a\"b</script>", "p'w\\\n");
+        let script = fill_script("a\"b</script>", "p'w\\\n", "a.com");
         assert!(script.contains("\"a\\\"b</script>\""));
         assert!(script.contains("\"p'w\\\\\\n\""));
         assert!(!script.contains('\n'));
@@ -533,6 +638,7 @@ mod tests {
     fn vault_file_round_trip() {
         let vault = Vault {
             enabled: false,
+            ask_windows: true,
             never: vec!["bank.example".into()],
             logins: vec![Login { host: "a.com".into(), user: "me".into(), pw: "AAAA".into() }],
         };
@@ -547,11 +653,14 @@ mod tests {
         // Not ours: left alone.
         assert!(!handle_console(Some(&url("https://a.com/")), "hello"));
         // Ours, but from a page we do not save for: swallowed, nothing stored.
-        assert!(handle_console(Some(&url("http://a.com/")), "__pteron_pw__{\"u\":\"x\",\"p\":\"y\"}"));
-        assert!(handle_console(None, "__pteron_pwform__"));
+        assert!(handle_console(Some(&url("http://a.com/")), &format!("{}{{\"u\":\"x\",\"p\":\"y\"}}", save_prefix())));
+        assert!(handle_console(None, &form_mark()));
+        // Without this run's secret (a frame inside the page, say): not ours, nothing happens.
+        assert!(!handle_console(Some(&url("https://a.com/")), "__pteron_pw__{\"u\":\"x\",\"p\":\"y\"}"));
+        assert!(!handle_console(Some(&url("https://a.com/")), "__pteron_pwform__"));
         // A page's own script cannot make the bar for a different site: the site comes from the
         // tab's address, not from the message.
-        let long = format!("__pteron_pw__{{\"u\":\"x\",\"p\":\"{}\"}}", "z".repeat(400));
+        let long = format!("{}{{\"u\":\"x\",\"p\":\"{}\"}}", save_prefix(), "z".repeat(400));
         assert!(handle_console(Some(&url("https://a.com/")), &long));
         assert!(!STATE.lock_ok().pending.as_ref().is_some_and(|p| p.password.len() > MAX_FIELD));
     }
@@ -559,6 +668,8 @@ mod tests {
     #[test]
     fn script_only_runs_on_top_pages() {
         assert!(SCRIPT.contains("window!==window.top"));
-        assert!(SCRIPT.contains(SAVE_PREFIX) && SCRIPT.contains(FORM_MARK));
+        let script = script();
+        assert!(script.contains(&format!("P='{}'", save_prefix())) && script.contains(&format!("F='{}'", form_mark())));
+        assert!(!script.contains("P='__pteron_pw__'"));
     }
 }

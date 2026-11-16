@@ -14,8 +14,12 @@ use egui::{
     RichText, ScrollArea, Sense, Shape, Stroke, TextEdit, pos2, vec2,
 };
 
-/// Width of the invisible strip at the left edge that opens the sidebar.
+/// Width of the invisible strip at the window edge that belongs to the sidebar while it is hidden.
 pub(crate) const HOT_ZONE: f32 = 4.0;
+/// How near the edge the mouse has to come for the sidebar to open (less on the right, where
+/// pages have their scroll bar), and how long it stays after the mouse has left it.
+const OPEN_ZONE: (f32, f32) = (16.0, 6.0);
+const LINGER_SECS: f64 = 0.8;
 pub(crate) const LOCATION_ID: &str = "location_input";
 
 thread_local! {
@@ -42,6 +46,10 @@ pub(crate) struct TabRow {
     pub active: bool,
     pub pinned: bool,
     pub favicon: Option<egui::load::SizedTexture>,
+    /// Kept awake by the user (never goes to sleep).
+    pub awake: bool,
+    /// One of the two tabs of the split view.
+    pub split: bool,
 }
 
 /// One bookmark, as shown in the list.
@@ -87,6 +95,8 @@ pub(crate) struct Model {
     pub suggestions: Vec<crate::library::Suggestion>,
     /// With dark mode for pages on and a web page showing: whether it is dark here.
     pub dark_here: Option<bool>,
+    /// Pteron draws the window's own top: minimize, maximize and close buttons are needed.
+    pub own_titlebar: bool,
 }
 
 /// What the user did in the sidebar this frame.
@@ -126,6 +136,76 @@ pub(crate) enum Action {
     ToggleDarkSite,
     /// Show or hide the bookmarks bar (top-tab layouts).
     ToggleBookmarksBar,
+    ReloadTab(usize),
+    /// Open the tab's page in another tab.
+    Duplicate(usize),
+    /// Keep the tab awake (it never goes to sleep), or stop doing so.
+    ToggleAwake(usize),
+    /// Split view: show this tab beside the active tab.
+    SplitWith(usize),
+    LeaveSplit,
+    /// Close every tab except this one, or every tab listed after it (pinned tabs stay).
+    CloseOthers(usize),
+    CloseAfter(usize),
+    Window(WindowAction),
+}
+
+/// What Pteron's own window top asks of the window.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum WindowAction {
+    /// Start moving the window with the mouse.
+    Drag,
+    Minimize,
+    /// Maximize, or back to the size before.
+    Maximize,
+    Close,
+}
+
+/// An empty part of Pteron's own window top: drag it to move the window, double-click to
+/// maximize. Call it before drawing what lies on top of it.
+pub(crate) fn drag_area(ui: &egui::Ui, rect: Rect, actions: &mut Vec<Action>) {
+    let response = ui.interact(rect, Id::new("pteron_window_drag"), Sense::click_and_drag());
+    if response.double_clicked() {
+        actions.push(Action::Window(WindowAction::Maximize));
+    } else if response.drag_started() {
+        actions.push(Action::Window(WindowAction::Drag));
+    }
+}
+
+/// Minimize, maximize and close, drawn leftwards from `right_top`. Returns their width.
+pub(crate) fn window_buttons(ui: &egui::Ui, right_top: Pos2, size: egui::Vec2, actions: &mut Vec<Action>) -> f32 {
+    let ink = ui.visuals().text_color();
+    let buttons = [(WindowAction::Close, "Close"), (WindowAction::Maximize, "Maximize"), (WindowAction::Minimize, "Minimize")];
+    for (index, (action, name)) in buttons.into_iter().enumerate() {
+        let rect = Rect::from_min_size(right_top - vec2(size.x * (index + 1) as f32, 0.0), size);
+        let response = ui.interact(rect, Id::new(("pteron_window_button", index)), Sense::click()).on_hover_text(name);
+        let painter = ui.painter();
+        let mut color = ink;
+        if response.hovered() {
+            let close = action == WindowAction::Close;
+            painter.rect_filled(rect, 0.0, if close { Color32::from_rgb(232, 17, 35) } else { ink.gamma_multiply(0.12) });
+            if close {
+                color = Color32::WHITE;
+            }
+        }
+        let (c, stroke) = (rect.center(), Stroke::new(1.2_f32, color));
+        match action {
+            WindowAction::Minimize => {
+                painter.line_segment([c + vec2(-5.0, 0.0), c + vec2(5.0, 0.0)], stroke);
+            },
+            WindowAction::Maximize => {
+                painter.rect_stroke(Rect::from_center_size(c, vec2(10.0, 10.0)), 1.0, stroke, egui::StrokeKind::Middle);
+            },
+            _ => {
+                painter.line_segment([c + vec2(-5.0, -5.0), c + vec2(5.0, 5.0)], stroke);
+                painter.line_segment([c + vec2(-5.0, 5.0), c + vec2(5.0, -5.0)], stroke);
+            },
+        }
+        if response.clicked() {
+            actions.push(Action::Window(action));
+        }
+    }
+    size.x * 3.0
 }
 
 #[derive(Default)]
@@ -148,6 +228,8 @@ pub(crate) struct State {
     /// Width of the sidebar and the side it is on (from the settings).
     pub width: f32,
     pub right: bool,
+    /// When the mouse left the open sidebar (it stays a moment longer).
+    pub left_at: Option<f64>,
 }
 
 /// Whether `text` contains every word of `filter` (ignoring case). An empty filter matches all.
@@ -160,7 +242,13 @@ pub(crate) fn filter_matches(filter: &str, text: &str) -> bool {
 pub(crate) fn update_visibility(ctx: &Context, state: &mut State) {
     let pointer_x = ctx.pointer_latest_pos().map(|pos| pos.x);
     let location_focused = ctx.memory(|memory| memory.has_focus(Id::new(LOCATION_ID)));
-    let reach = if state.visible { state.width + 6.0 } else { HOT_ZONE };
+    let reach = if state.visible {
+        state.width + 6.0
+    } else if state.right {
+        OPEN_ZONE.1
+    } else {
+        OPEN_ZONE.0
+    };
     let right_edge = ctx.content_rect().max.x;
     let near = if state.page_edge {
         true
@@ -171,7 +259,19 @@ pub(crate) fn update_visibility(ctx: &Context, state: &mut State) {
     } else {
         pointer_x.is_some_and(|x| x <= reach)
     };
-    let visible = state.pinned || state.focus_location || location_focused || near;
+    // The sidebar stays a moment after the mouse has left it.
+    let now = ctx.input(|input| input.time);
+    if near {
+        state.left_at = None;
+    } else if state.visible {
+        let left_at = *state.left_at.get_or_insert(now);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64((left_at + LINGER_SECS - now).max(0.02)));
+    }
+    let lingering = state.left_at.is_some_and(|left_at| now - left_at < LINGER_SECS);
+    let visible = state.pinned || state.focus_location || location_focused || near || lingering;
+    if !visible {
+        state.left_at = None;
+    }
     if visible != state.visible {
         ctx.request_repaint();
     }
@@ -189,6 +289,19 @@ pub(crate) fn set_left_inset(points: f32) {
 
 pub(crate) fn left_inset() -> f32 {
     f32::from_bits(LEFT_INSET_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// How far the active tab's page starts to the right of the page area (the right-hand page of a
+/// split view), in the same units as `left_inset`.
+static PANE_INSET_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn set_pane_inset(points: f32) {
+    PANE_INSET_BITS.store(points.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Where the active page's own pop-ups (lists, menus, the typing aid) measure from.
+pub(crate) fn popup_inset() -> f32 {
+    left_inset() + f32::from_bits(PANE_INSET_BITS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// The interface size setting (1.0 = 100%): egui's points are this many screen points. Read by
@@ -453,6 +566,14 @@ fn framed(
                     ui.set_min_height(height - 2.0 * margin);
                     let inner_width = ui.available_width();
 
+                    // Pteron's own window top: a strip to drag the window by, and its buttons.
+                    if model.own_titlebar {
+                        let (strip, _) = ui.allocate_exact_size(vec2(inner_width, 22.0), Sense::hover());
+                        let strip = strip.expand2(vec2(margin, 0.0)).with_min_y(strip.min.y - margin);
+                        drag_area(ui, strip, actions);
+                        window_buttons(ui, strip.right_top(), vec2(34.0, strip.height()), actions);
+                        ui.add_space(2.0);
+                    }
                     // Navigation buttons.
                     ui.horizontal(|ui| {
                         nav_buttons(ui, model, look, location_dirty, actions);
@@ -520,7 +641,7 @@ fn framed(
                                 }
                                 for (index, tab) in model.tabs.iter().enumerate() {
                                     if tab.pinned == section_pinned && filter_matches(&filter, &tab.label) {
-                                        tab_row(ui, index, tab, actions);
+                                        tab_row(ui, index, tab, model, actions);
                                     }
                                 }
                                 for (index, tab) in model.sleeping.iter().enumerate() {
@@ -952,7 +1073,7 @@ pub(crate) fn drag_to_reorder(ui: &egui::Ui, key: &str, index: usize, rect: Rect
     ui.input(|input| input.pointer.any_released()).then_some((from, index))
 }
 
-fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Action>) {
+fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, model: &Model, actions: &mut Vec<Action>) {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), row_height()), Sense::click_and_drag());
     if let Some((from, to)) = drag_to_reorder(ui, "pteron_tab_drag", index, rect, &response) {
@@ -995,7 +1116,8 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Acti
             Color32::WHITE,
         );
     }
-    let text_clip = Rect::from_min_max(rect.min, pos2(rect.max.x - 28.0, rect.max.y));
+    let marks = tab_marks(painter, pos2(rect.max.x - 30.0, rect.center().y), tab, text_color);
+    let text_clip = Rect::from_min_max(rect.min, pos2(rect.max.x - 28.0 - marks, rect.max.y));
     painter.with_clip_rect(text_clip).text(
         pos2(rect.min.x + 30.0, rect.center().y),
         Align2::LEFT_CENTER,
@@ -1031,29 +1153,82 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, actions: &mut Vec<Acti
         actions.push(Action::Activate(index));
     }
     let response = if tab.label.chars().count() > 26 { response.on_hover_text(&tab.label) } else { response };
-    response.context_menu(|ui| tab_menu(ui, index, tab.pinned, actions));
+    response.context_menu(|ui| tab_menu(ui, index, model, actions));
+}
+
+/// Small signs on a tab, drawn leftwards from `right`: an eye for "kept awake", two panes for
+/// split view. Returns the width they took.
+pub(crate) fn tab_marks(painter: &egui::Painter, right: Pos2, tab: &TabRow, color: Color32) -> f32 {
+    let stroke = Stroke::new(1.2_f32, color.gamma_multiply(0.75));
+    let mut used = 0.0;
+    if tab.awake {
+        let center = right - vec2(used + 7.0, 0.0);
+        painter.circle_stroke(center, 4.5, stroke);
+        painter.circle_filled(center, 1.6, stroke.color);
+        used += 16.0;
+    }
+    if tab.split {
+        let center = right - vec2(used + 7.0, 0.0);
+        painter.rect_stroke(Rect::from_center_size(center, vec2(12.0, 9.0)), 1.5, stroke, egui::StrokeKind::Middle);
+        painter.line_segment([center - vec2(0.0, 4.5), center + vec2(0.0, 4.5)], stroke);
+        used += 16.0;
+    }
+    used
 }
 
 /// The right-click menu of a live tab.
-pub(crate) fn tab_menu(ui: &mut egui::Ui, index: usize, pinned: bool, actions: &mut Vec<Action>) {
-    if ui.button(if pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
-        actions.push(Action::TogglePin(index));
+pub(crate) fn tab_menu(ui: &mut egui::Ui, index: usize, model: &Model, actions: &mut Vec<Action>) {
+    fn item(ui: &mut egui::Ui, text: &str, action: Action, actions: &mut Vec<Action>) {
+        if ui.button(text).clicked() {
+            actions.push(action);
+            ui.close();
+        }
+    }
+    let Some(tab) = model.tabs.get(index) else {
+        return;
+    };
+    item(ui, "Reload", Action::ReloadTab(index), actions);
+    item(ui, "Duplicate", Action::Duplicate(index), actions);
+    ui.separator();
+    item(ui, if tab.pinned { "Unpin tab" } else { "Pin tab" }, Action::TogglePin(index), actions);
+    let mut awake = tab.awake;
+    if ui
+        .checkbox(&mut awake, "Keep awake")
+        .on_hover_text("This tab never goes to sleep, until you close it or Pteron")
+        .changed()
+    {
+        actions.push(Action::ToggleAwake(index));
         ui.close();
     }
-    if ui.button("Open in default browser").clicked() {
-        actions.push(Action::OpenExternal(index));
-        ui.close();
+    if tab.split {
+        item(ui, "Leave split view", Action::LeaveSplit, actions);
+    } else if !tab.active {
+        item(ui, "Show beside the current tab", Action::SplitWith(index), actions);
+    } else if model.tabs.len() > 1 {
+        ui.menu_button("Split view with", |ui| {
+            for (other, row) in model.tabs.iter().enumerate().filter(|(other, _)| *other != index) {
+                let label: String = row.label.chars().take(40).collect();
+                item(ui, &label, Action::SplitWith(other), actions);
+            }
+        });
     }
+    ui.separator();
+    item(ui, "Open in default browser", Action::OpenExternal(index), actions);
     if ui.button("Check this page").on_hover_text("Find out why a page is blank or broken").clicked() {
         actions.push(Action::CheckPage(index));
         ui.close();
     }
+    ui.separator();
     if ui.button("Close tab").clicked() {
-        if pinned {
+        if tab.pinned {
             actions.push(Action::TogglePin(index));
         }
         actions.push(Action::Close(index));
         ui.close();
+    }
+    if model.tabs.len() + model.sleeping.len() > 1 {
+        item(ui, "Close other tabs", Action::CloseOthers(index), actions);
+        item(ui, "Close tabs after this one", Action::CloseAfter(index), actions);
     }
 }
 

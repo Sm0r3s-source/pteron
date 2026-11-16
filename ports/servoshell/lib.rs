@@ -41,6 +41,7 @@ mod locks;
 mod look;
 mod signing;
 mod util;
+mod danger;
 mod filters;
 mod memsaver;
 mod privacy;

@@ -76,6 +76,10 @@ pub struct WebViewCollection {
 
     /// Whether or not the active WebView in this collection has system focus.
     has_system_focus: bool,
+
+    /// Pteron: split view. These two tabs (left, right) are shown side by side whenever one of
+    /// them is the active tab.
+    split: Option<(WebViewId, WebViewId)>,
 }
 
 impl WebViewCollection {
@@ -90,6 +94,9 @@ impl WebViewCollection {
     pub fn remove(&mut self, id: WebViewId) -> Option<WebView> {
         self.creation_order.retain(|&webview_id| webview_id != id);
         let removed_webview = self.webviews.remove(&id);
+        if self.split.is_some_and(|(left, right)| left == id || right == id) {
+            self.set_split(None);
+        }
 
         if self.active_webview_id == Some(id) {
             self.active_webview_id = None;
@@ -136,20 +143,42 @@ impl WebViewCollection {
         self.webviews.is_empty()
     }
 
+    /// Pteron: the split view pair, if there is one.
+    pub(crate) fn split(&self) -> Option<(WebViewId, WebViewId)> {
+        self.split
+    }
+
+    /// Pteron: the split view pair while it is on screen (one of the two is the active tab).
+    pub(crate) fn shown_split(&self) -> Option<(WebViewId, WebViewId)> {
+        let active = self.active_webview_id?;
+        self.split.filter(|(left, right)| *left == active || *right == active)
+    }
+
+    /// Pteron: start split view with these two tabs (left, right), or end it.
+    pub(crate) fn set_split(&mut self, split: Option<(WebViewId, WebViewId)>) {
+        self.split = split.filter(|(left, right)| {
+            left != right && self.webviews.contains_key(left) && self.webviews.contains_key(right)
+        });
+        if let Some(active) = self.active_webview_id.filter(|id| self.webviews.contains_key(id)) {
+            self.activate_webview(active);
+        }
+    }
+
     pub(crate) fn activate_webview(&mut self, id_to_activate: WebViewId) {
         assert!(self.creation_order.contains(&id_to_activate));
 
         self.active_webview_id = Some(id_to_activate);
+        // Pteron: in split view the other tab of the pair stays on screen too.
+        let shown = self.shown_split();
         for (webview_id, webview) in self.all_in_creation_order() {
-            if id_to_activate == webview_id {
-                if self.has_system_focus {
-                    webview.set_focused(true);
-                }
+            if self.has_system_focus {
+                webview.set_focused(id_to_activate == webview_id);
+            }
+            if id_to_activate == webview_id ||
+                shown.is_some_and(|(left, right)| left == webview_id || right == webview_id)
+            {
                 webview.show();
             } else {
-                if self.has_system_focus {
-                    webview.set_focused(false);
-                }
                 webview.hide();
             }
         }
@@ -842,11 +871,19 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_move_to(&self, webview: WebView, new_position: DeviceIntPoint) {
+        // Pteron: pages may not move or resize the browser window (window.moveTo/resizeTo could
+        // push it off screen or shrink it to nothing); only automated tests may.
+        if self.servoshell_preferences.webdriver_port.get().is_none() {
+            return;
+        }
         self.platform_window_for_webview(&webview)
             .set_position(new_position);
     }
 
     fn request_resize_to(&self, webview: WebView, requested_outer_size: DeviceIntSize) {
+        if self.servoshell_preferences.webdriver_port.get().is_none() {
+            return;
+        }
         self.platform_window_for_webview(&webview)
             .request_resize(&webview, requested_outer_size);
     }
@@ -861,6 +898,17 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_navigation(&self, webview: WebView, navigation_request: NavigationRequest) {
+        // Pteron: a web page may not send you to a data: address (a whole fake page hidden in the
+        // address, a common phishing trick) or to a file on your computer. Addresses typed into
+        // the address bar, and frames whose src is such an address, are not affected.
+        let from_web = webview.url().is_some_and(|url| matches!(url.scheme(), "http" | "https"));
+        if navigation_request.url.scheme() == "data" ||
+            (from_web && navigation_request.url.scheme() == "file")
+        {
+            navigation_request.deny();
+            crate::downloads::set_notice("Blocked: the page tried to open an address that is not a web page.".to_string());
+            return;
+        }
         // Pteron: YouTube videos open in a simple local player page (YouTube's own player
         // needs Media Source Extensions, which Servo does not have yet).
         if crate::pteron::settings().youtube_player &&
@@ -902,7 +950,9 @@ impl WebViewDelegate for RunningAppState {
             let url = navigation_request.url.clone();
             navigation_request.deny();
             if crate::pteron::gesture_within(2000) {
-                crate::downloads::begin(&url);
+                if crate::downloads::page_may_download() {
+                    crate::downloads::begin(&url);
+                }
             } else {
                 crate::downloads::note_blocked(&url);
             }
@@ -1007,8 +1057,10 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_permission(&self, webview: WebView, permission_request: PermissionRequest) {
+        // Pteron: the dialog names the site that asks.
+        let site = crate::window::site_of(&webview);
         self.platform_window_for_webview(&webview)
-            .show_permission_dialog(webview.id(), permission_request);
+            .show_permission_dialog(webview.id(), permission_request, site);
     }
 
     fn notify_new_frame_ready(&self, webview: WebView) {
@@ -1074,9 +1126,37 @@ impl WebViewDelegate for RunningAppState {
         // whatever the full filter lists say).
         let (url, main_frame) = (load.request().url.clone(), load.request().is_for_main_frame);
         let destination = format!("{:?}", load.request().destination);
+        // A blocked frame gets an empty page instead of a cancelled load: a cancelled frame
+        // never finishes, and then the whole page never finishes loading (its load event
+        // never fires).
+        let refuse = |load: servo::WebResourceLoad| {
+            let frame = matches!(destination.as_str(), "IFrame" | "Frame" | "Embed" | "Object");
+            let started = load.intercept(servo::WebResourceResponse::new(url.clone()));
+            if frame { started.finish() } else { started.cancel() }
+        };
+        // Pteron: known phishing and malware sites. The page itself becomes a warning (at the
+        // site's address); anything else from such a site is not loaded.
+        if crate::danger::is_dangerous(&url) {
+            if main_frame {
+                let mut headers = headers::HeaderMap::new();
+                headers::HeaderMapExt::typed_insert(&mut headers, headers::ContentType::html());
+                let mut page = load.intercept(servo::WebResourceResponse::new(url.clone()).headers(headers));
+                page.send_body_data(crate::danger::warning_html(&url).into_bytes());
+                page.finish();
+            } else {
+                refuse(load);
+            }
+            return;
+        }
         if crate::adblock::should_block_request(&url, webview.url().as_ref(), &destination, main_frame) {
             crate::adblock::note_blocked();
-            load.intercept(servo::WebResourceResponse::new(url)).cancel();
+            refuse(load);
+            return;
+        }
+        // Pteron: internet sites cannot send requests into your computer or home network.
+        if !main_frame && crate::privacy::blocks_private_request(&url, webview.url().as_ref()) {
+            log::warn!("blocked a request from a web page into the local network: {}", url.origin().ascii_serialization());
+            refuse(load);
         }
     }
 

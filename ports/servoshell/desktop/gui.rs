@@ -82,6 +82,17 @@ pub struct Gui {
     base_zoom: std::cell::Cell<f32>,
     /// Pteron: the count of settings changes made outside the settings page that were picked up.
     settings_seen: u64,
+    /// Pteron: the bar between the two pages of a split view (it belongs to the interface).
+    split_divider: Option<egui::Rect>,
+    /// Pteron: the window has Pteron's own top instead of the system's title bar (`None`
+    /// until the first frame has set it).
+    own_titlebar: Option<bool>,
+    /// Pteron: the system took the mouse over to move the window, so the interface never sees
+    /// the button come up and has to be told.
+    mouse_taken: bool,
+    /// Pteron: when a page went full screen, and which site (shown for a few seconds, since a
+    /// full-screen page hides the address bar and could pretend to be anything).
+    fullscreen_notice: Option<(f64, String)>,
     settings: pteron::Settings,
     settings_page: settings_page::PageState,
     /// The tab that was active last frame; switching tabs closes the settings page.
@@ -380,6 +391,10 @@ impl Gui {
             page_rect: egui::Rect::NOTHING,
             base_zoom: std::cell::Cell::new(1.0),
             settings_seen: pteron::outside_changes(),
+            split_divider: None,
+            own_titlebar: None,
+            mouse_taken: false,
+            fullscreen_notice: None,
             settings: pteron::settings(),
             settings_page: Default::default(),
             last_active_tab: None,
@@ -447,6 +462,16 @@ impl Gui {
             if !self.page_rect.contains(point) {
                 return true;
             }
+            // A click beside an open menu closes the menu (and is not for the page).
+            if egui::Popup::is_any_open(ctx) {
+                return true;
+            }
+            // The bar between the pages of a split view, also while it is being dragged.
+            if self.split_divider.is_some_and(|bar| bar.expand2(egui::vec2(2.0, 0.0)).contains(point)) ||
+                ctx.egui_is_using_pointer()
+            {
+                return true;
+            }
             // The edge strip that opens the sidebar (a pinned one is beside the page).
             if self.sidebar.pinned {
                 return false;
@@ -459,6 +484,38 @@ impl Gui {
             };
         }
         position.y < self.toolbar_height.get()
+    }
+
+    /// Pteron: with its own window top the window has no frame to resize it by, so the outer
+    /// few points of the window do that. `position` is in screen points.
+    pub(crate) fn resize_direction(
+        &self,
+        position: Point2D<f32, DeviceIndependentPixel>,
+    ) -> Option<winit::window::ResizeDirection> {
+        use winit::window::ResizeDirection::*;
+        if self.own_titlebar != Some(true) {
+            return None;
+        }
+        let size = self.context.egui_ctx.content_rect().size() * self.ui_scale();
+        // (Corners reach a little further along the edge.)
+        let near = |distance: f32, other: f32| distance < 5.0 || (distance < 14.0 && other < 5.0);
+        let (left, top) = (position.x, position.y);
+        let (right, bottom) = (size.x - position.x, size.y - position.y);
+        let west = near(left, top.min(bottom));
+        let east = near(right, top.min(bottom));
+        let north = near(top, left.min(right));
+        let south = near(bottom, left.min(right));
+        Some(match (north, south, west, east) {
+            (true, _, true, _) => NorthWest,
+            (true, _, _, true) => NorthEast,
+            (_, true, true, _) => SouthWest,
+            (_, true, _, true) => SouthEast,
+            (true, ..) => North,
+            (_, true, ..) => South,
+            (_, _, true, _) => West,
+            (_, _, _, true) => East,
+            _ => return None,
+        })
     }
 
     /// Pteron: true while the settings page is showing.
@@ -593,6 +650,10 @@ impl Gui {
             page_rect,
             base_zoom,
             settings_seen,
+            split_divider,
+            own_titlebar,
+            mouse_taken,
+            fullscreen_notice,
             settings,
             settings_page,
             last_active_tab,
@@ -601,6 +662,27 @@ impl Gui {
         } = self;
 
         let winit_window = headed_window.winit_window();
+        // Pteron: the system moved the window with the mouse held down; the button is up now.
+        if std::mem::take(mouse_taken) {
+            let events = &mut context.egui_winit.egui_input_mut().events;
+            events.push(egui::Event::PointerButton {
+                pos: egui::Pos2::ZERO,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            });
+            events.push(egui::Event::PointerGone);
+        }
+        // Pteron: its own window top instead of the system's title bar (a setting).
+        let own = *sidebar_mode &&
+            !settings.look.system_titlebar &&
+            std::env::var_os("PTERON_SYSTEM_TITLEBAR").is_none();
+        if *own_titlebar != Some(own) {
+            *own_titlebar = Some(own);
+            winit_window.set_decorations(!own);
+            #[cfg(target_os = "windows")]
+            winit::platform::windows::WindowExtWindows::set_undecorated_shadow(winit_window, own);
+        }
         context.run(winit_window, |ctx| {
             load_pending_favicons(ctx, window, favicon_textures);
 
@@ -702,6 +784,8 @@ impl Gui {
                                 .get(&id)
                                 .map(|(_, favicon)| *favicon)
                                 .filter(|_| look.tab_icons),
+                            awake: window.is_awake(id),
+                            split: window.split().is_some_and(|(left, right)| left == id || right == id),
                         })
                         .collect(),
                     sleeping: window
@@ -754,6 +838,7 @@ impl Gui {
                     dark_here: current_page.as_ref().filter(|_| look.dark_pages).and_then(|(url, _)| {
                         Url::parse(url).ok()?.host_str().map(|host| look.dark_for(host))
                     }),
+                    own_titlebar: own,
                 };
                 let height = ctx.available_rect_before_wrap().height();
                 let actions = if look.top_tabs() {
@@ -871,7 +956,7 @@ impl Gui {
                         },
                         sidebar::Action::CheckPage(index) => {
                             if let Some(webview) = ids.get(index).and_then(|id| window.webview_by_id(*id)) {
-                                webview.evaluate_javascript(crate::sitecheck::REPORT_JS, |_| {});
+                                webview.evaluate_javascript(crate::sitecheck::report_js(), |_| {});
                             }
                         },
                         sidebar::Action::TogglePin(index) => {
@@ -906,6 +991,59 @@ impl Gui {
                                 pteron::update(settings.clone());
                                 state.refresh_page_look();
                                 window.queue_user_interface_command(UserInterfaceCommand::Reload);
+                            }
+                        },
+                        sidebar::Action::ReloadTab(index) => {
+                            if let Some(webview) = ids.get(index).and_then(|id| window.webview_by_id(*id)) {
+                                webview.reload();
+                            }
+                        },
+                        sidebar::Action::Duplicate(index) => {
+                            if let Some(url) = ids
+                                .get(index)
+                                .and_then(|id| window.webview_by_id(*id))
+                                .and_then(|webview| webview.url())
+                            {
+                                window.queue_user_interface_command(UserInterfaceCommand::NewTabWithUrl(url));
+                            }
+                        },
+                        sidebar::Action::ToggleAwake(index) => {
+                            if let Some(id) = ids.get(index) {
+                                window.toggle_awake(*id);
+                            }
+                        },
+                        sidebar::Action::Window(sidebar::WindowAction::Drag) => {
+                            if winit_window.drag_window().is_ok() {
+                                *mouse_taken = true;
+                            }
+                        },
+                        sidebar::Action::Window(sidebar::WindowAction::Minimize) => {
+                            winit_window.set_minimized(true)
+                        },
+                        sidebar::Action::Window(sidebar::WindowAction::Maximize) => {
+                            winit_window.set_maximized(!winit_window.is_maximized())
+                        },
+                        sidebar::Action::Window(sidebar::WindowAction::Close) => {
+                            // (The same as the system's close button.)
+                            if pteron::settings().clear_on_exit {
+                                library::clear_history();
+                                state.servo().network_manager().clear_cache();
+                            }
+                            window.schedule_close();
+                        },
+                        sidebar::Action::SplitWith(index) => window.set_split_with(ids.get(index).copied()),
+                        sidebar::Action::LeaveSplit => window.set_split_with(None),
+                        sidebar::Action::CloseOthers(index) | sidebar::Action::CloseAfter(index) => {
+                            // Pinned tabs stay; sleeping tabs are listed after the live ones.
+                            let after = matches!(action, sidebar::Action::CloseAfter(_));
+                            for (at, id) in ids.iter().enumerate() {
+                                if at != index && (!after || at > index) && !window.is_pinned(*id) {
+                                    window.queue_user_interface_command(UserInterfaceCommand::CloseWebView(*id));
+                                }
+                            }
+                            let sleeping = window.sleeping_tabs();
+                            for at in (0..sleeping.len()).rev().filter(|at| !sleeping[*at].pinned) {
+                                window.queue_user_interface_command(UserInterfaceCommand::CloseSleepingTab(at));
                             }
                         },
                         sidebar::Action::ToggleBookmarksBar => {
@@ -1335,13 +1473,72 @@ impl Gui {
                 webview.resize(PhysicalSize::new(size.width as u32, size.height as u32))
             }
 
+            // Pteron: split view. Both pages are drawn into the one picture of the page area,
+            // each in its own part, with a bar between them that can be dragged.
+            let ppp = ctx.pixels_per_point();
+            let place = |rect: egui::Rect| {
+                let corner = |pos: egui::Pos2| Point2D::new(((pos.x - available_rect.min.x) * ppp).round(), ((pos.y - available_rect.min.y) * ppp).round());
+                euclid::Box2D::new(corner(rect.min), corner(rect.max))
+            };
+            let active_id = window.active_webview().map(|webview| webview.id());
+            let mut active_pane = available_rect;
+            *split_divider = None;
+            if let Some((left, right)) = window.shown_split() {
+                let x = (available_rect.min.x + available_rect.width() * window.split_ratio()).round();
+                let bar = egui::Rect::from_min_max(pos2(x - 3.0, available_rect.min.y), pos2(x + 3.0, available_rect.max.y));
+                let panes = [
+                    (left, egui::Rect::from_min_max(available_rect.min, bar.left_bottom())),
+                    (right, egui::Rect::from_min_max(bar.right_top(), available_rect.max)),
+                ];
+                for (id, rect) in panes {
+                    if let Some(webview) = window.webview_by_id(id) {
+                        webview.set_rect(place(rect));
+                    }
+                    if Some(id) == active_id {
+                        active_pane = rect;
+                    }
+                }
+                window.set_panes(Some(panes.map(|(id, rect)| {
+                    (id, (rect.min.x - available_rect.min.x) * ppp, (rect.max.x - available_rect.min.x) * ppp)
+                })));
+                let response = ctx
+                    .interact(bar.expand2(egui::vec2(2.0, 0.0)), Id::new("pteron_split_divider"), egui::Sense::click_and_drag())
+                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                if response.double_clicked() {
+                    window.set_split_ratio(0.5);
+                } else if response.dragged() &&
+                    let Some(pos) = response.interact_pointer_pos()
+                {
+                    window.set_split_ratio((pos.x - available_rect.min.x) / available_rect.width());
+                }
+                *split_divider = Some(bar);
+            } else {
+                window.set_panes(None);
+                if let Some(webview) = window.active_webview() {
+                    webview.set_rect(place(available_rect));
+                }
+            }
+            // (Lists and menus of the active page measure from its own corner.)
+            sidebar::set_pane_inset((active_pane.min.x - available_rect.min.x) * sidebar::ui_scale());
+
             // Pteron: the compatibility tab's view covers the page area while it is the active tab
             // and nothing from egui (a menu, the Settings page, the address bar list) needs to be on top.
             {
                 let active = window.active_webview();
                 let active_url = active.as_ref().and_then(|webview| webview.url());
+                // Menus, lists and tips open over the page. On Windows the system's view keeps
+                // showing the page with a hole where they are; elsewhere it steps aside meanwhile.
+                let popups: Vec<egui::Rect> = ctx.memory(|memory| {
+                    let areas = memory.areas();
+                    memory
+                        .layer_ids()
+                        .filter(|layer| matches!(layer.order, Order::Foreground | Order::Tooltip) && areas.is_visible(layer))
+                        .filter_map(|layer| memory.area_rect(layer.id))
+                        .filter(|rect| rect.intersects(active_pane))
+                        .collect()
+                });
                 let free = !settings_page.open &&
-                    !ctx.memory(|memory| memory.any_popup_open()) &&
+                    (cfg!(windows) || popups.is_empty()) &&
                     !sidebar::location_focused(ctx);
                 let live: Vec<WebViewId> = window.webview_ids();
                 let current = active.as_ref().zip(active_url.as_ref()).map(|(webview, url)| (webview.id(), url));
@@ -1356,8 +1553,9 @@ impl Gui {
                 if on_compat_page {
                     ctx.request_repaint_after(std::time::Duration::from_millis(if sidebar.pinned { 500 } else { 100 }));
                 }
-                // A sidebar floating over the page leaves the rest of it to the view.
-                let mut area = available_rect;
+                // A sidebar floating over the page leaves the rest of it to the view. (In split
+                // view the compatibility tab has its half while it is the active tab.)
+                let mut area = active_pane;
                 if sidebar.visible && !sidebar.pinned {
                     if sidebar.right {
                         area.max.x = area.max.x.min(ctx.content_rect().max.x - sidebar.width);
@@ -1365,7 +1563,8 @@ impl Gui {
                         area.min.x = area.min.x.max(sidebar.width);
                     }
                 }
-                compat_host.sync(winit_window, &live, current, free.then_some(area), ctx.pixels_per_point(), ctx.wants_keyboard_input());
+                let corner = f32::from(ctx.global_style().visuals.menu_corner_radius.nw);
+                compat_host.sync(winit_window, &live, current, free.then_some(area), (&popups, corner), ctx.pixels_per_point(), ctx.wants_keyboard_input());
                 crate::compat_host::note_alive(compat_host.alive());
                 // The system engine passed a browser check: Servo carries on with the pass.
                 if let Some(handoff) = compat_host.take_handoff() {
@@ -1397,6 +1596,32 @@ impl Gui {
             // Pteron: find in page (Ctrl+F).
             Self::show_find_bar(ctx, window);
             Self::show_zoom_hud(ctx);
+
+            // Pteron: say which site went full screen, and how to leave.
+            let now = ctx.input(|input| input.time);
+            if headed_window.is_fullscreen_from_document() {
+                let notice = fullscreen_notice.get_or_insert_with(|| {
+                    let site = window
+                        .active_webview()
+                        .and_then(|webview| webview.url())
+                        .and_then(|url| url.host_str().map(|host| host.trim_start_matches("www.").to_string()))
+                        .unwrap_or_else(|| "This page".to_string());
+                    (now, site)
+                });
+                if now - notice.0 < 4.0 {
+                    egui::Area::new(Id::new("pteron_fullscreen_notice"))
+                        .order(Order::Tooltip)
+                        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0))
+                        .show(ctx, |ui| {
+                            egui::Frame::popup(ui.style()).inner_margin(egui::vec2(16.0, 10.0)).show(ui, |ui| {
+                                ui.label(egui::RichText::new(format!("{} is now full screen. Press Esc to leave.", notice.1)).size(15.0));
+                            });
+                        });
+                    ctx.request_repaint_after(std::time::Duration::from_millis(250));
+                }
+            } else {
+                *fullscreen_notice = None;
+            }
             Self::show_password_bars(ctx, window);
 
             // Pteron: short messages from reading mode.
@@ -1465,6 +1690,18 @@ impl Gui {
                         render_to_parent(painter.gl(), rect_in_parent)
                     })),
                 });
+            }
+            // Pteron: split view's bar, and a line around the page that has the keyboard.
+            if let Some(bar) = *split_divider {
+                let [r, g, b] = crate::appearance::current_accent();
+                let painter = ctx.layer_painter(LayerId::background());
+                painter.rect_filled(bar, 0.0, ctx.visuals().panel_fill);
+                painter.rect_stroke(
+                    active_pane,
+                    0.0,
+                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(r, g, b)),
+                    egui::StrokeKind::Inside,
+                );
             }
         });
 

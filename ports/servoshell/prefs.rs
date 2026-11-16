@@ -31,13 +31,15 @@ use crate::VERSION;
 /// These preferences are disabled by default but activated in experimental mode.
 /// For more details, see the
 /// [experimental features documentation](https://book.servo.org/design-documentation/experimental-features.html).
+///
+/// Pteron: two are left out because the engine does not ask first: the async clipboard
+/// (`dom_async_clipboard_enabled`: any page could read what you copied) and protocol handlers
+/// (`dom_navigator_protocol_handlers_enabled`: a page could take over mailto: and similar links).
 pub(crate) static EXPERIMENTAL_PREFS: &[&str] = &[
-    "dom_async_clipboard_enabled",
     "dom_exec_command_enabled",
     "dom_fontface_enabled",
     "dom_indexeddb_enabled",
     "dom_intersection_observer_enabled",
-    "dom_navigator_protocol_handlers_enabled",
     "dom_notification_enabled",
     "dom_offscreen_canvas_enabled",
     "dom_permissions_enabled",
@@ -602,6 +604,11 @@ fn update_preferences_from_command_line_arguments(
     }
 
     preferences.network_privacy_signals = crate::pteron::settings().privacy_signals;
+    preferences.network_block_third_party_cookies = crate::pteron::settings().block_third_party_cookies;
+    // Pteron: strict security turns off the JavaScript compiler (JIT), like Edge's strict mode.
+    if crate::pteron::settings().strict_security {
+        preferences.js_disable_jit = true;
+    }
 
     // Pteron: memory saver trims thread pools and the HTTP cache (command line still wins).
     {

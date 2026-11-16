@@ -85,6 +85,14 @@ pub(crate) struct Settings {
     pub strip_tracking: bool,
     /// Send Do Not Track and Global Privacy Control signals (applies after a restart).
     pub privacy_signals: bool,
+    /// Strict security: the JavaScript engine runs without its speed-up compiler (JIT), where
+    /// most engine attacks happen. Slower scripts, no WebAssembly. Applies after a restart.
+    pub strict_security: bool,
+    /// Requests that other sites cause (embedded frames, pictures, scripts) carry no cookies.
+    /// Applies after a restart.
+    pub block_third_party_cookies: bool,
+    /// Warn before known phishing and malware sites (free lists, checked on this computer).
+    pub block_dangerous_sites: bool,
     /// Look for the https version of an http site before showing the warning.
     pub https_first: bool,
     /// Use the full EasyList and EasyPrivacy filter lists in the ad blocker (uses more memory).
@@ -135,6 +143,9 @@ impl Default for Settings {
             multi_engines: vec!["duckduckgo".to_string(), "bing".to_string()],
             strip_tracking: true,
             privacy_signals: true,
+            strict_security: false,
+            block_third_party_cookies: false,
+            block_dangerous_sites: true,
             https_first: true,
             adblock_filters: false,
             compat_tab_mode: "auto".to_string(),
@@ -221,6 +232,9 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
     for (key, field) in [
         ("strip_tracking", &mut settings.strip_tracking),
         ("privacy_signals", &mut settings.privacy_signals),
+        ("strict_security", &mut settings.strict_security),
+        ("block_third_party_cookies", &mut settings.block_third_party_cookies),
+        ("block_dangerous_sites", &mut settings.block_dangerous_sites),
         ("https_first", &mut settings.https_first),
         ("adblock_filters", &mut settings.adblock_filters),
         ("compat_tab_no_gpu", &mut settings.compat_tab_no_gpu),
@@ -318,6 +332,7 @@ fn store() -> &'static RwLock<Settings> {
         let loaded = load_from_disk();
         crate::adblock::set_enabled(loaded.adblock);
         crate::filters::set_enabled(loaded.adblock && loaded.adblock_filters);
+        crate::danger::set_enabled(loaded.block_dangerous_sites);
         crate::memsaver::set_level(crate::memsaver::Level::from_id(&loaded.memory_mode));
         RwLock::new(loaded)
     })
@@ -353,6 +368,7 @@ pub(crate) fn edit(change: impl FnOnce(&mut Settings)) {
 pub(crate) fn update(new_settings: Settings) {
     crate::adblock::set_enabled(new_settings.adblock);
     crate::filters::set_enabled(new_settings.adblock && new_settings.adblock_filters);
+    crate::danger::set_enabled(new_settings.block_dangerous_sites);
     crate::memsaver::set_level(crate::memsaver::Level::from_id(&new_settings.memory_mode));
     crate::sync::changed_soon();
     if let Ok(mut current) = store().write() {
@@ -394,6 +410,9 @@ pub(crate) fn update(new_settings: Settings) {
         "multi_engines": new_settings.multi_engines,
         "strip_tracking": new_settings.strip_tracking,
         "privacy_signals": new_settings.privacy_signals,
+        "strict_security": new_settings.strict_security,
+        "block_third_party_cookies": new_settings.block_third_party_cookies,
+        "block_dangerous_sites": new_settings.block_dangerous_sites,
         "https_first": new_settings.https_first,
         "adblock_filters": new_settings.adblock_filters,
         "compat_tab_mode": new_settings.compat_tab_mode,
@@ -610,9 +629,11 @@ fn tile_html(suggestion: &crate::library::Suggestion) -> String {
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "·".to_string());
     let name = if suggestion.title.is_empty() { host.clone() } else { suggestion.title.clone() };
+    // Only web addresses become links (never javascript: or data:).
+    let href = if suggestion.url.starts_with("https://") || suggestion.url.starts_with("http://") { suggestion.url.as_str() } else { "#" };
     format!(
         "<a class=\"tile\" href=\"{}\"><span class=\"ico\">{}</span><span class=\"name\">{}</span></a>",
-        html_escape(&suggestion.url),
+        html_escape(href),
         html_escape(&letter),
         html_escape(&name),
     )
@@ -795,10 +816,10 @@ pub(crate) fn take_first_run() -> bool {
 pub(crate) const PAGE_STYLE_PUBLIC: &str = PAGE_STYLE;
 const PAGE_STYLE: &str = "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <style>:root{color-scheme:dark light}body{font:16px/1.55 system-ui,Segoe UI,sans-serif;max-width:680px;margin:48px auto;padding:0 20px;background:#16181d;color:#e6e8ec}\
-@media (prefers-color-scheme:light){body{background:#fafafa;color:#1c1e22}.card{background:#fff;border-color:#dcdfe4}code{background:#eceef2}}\
 h1{font-size:28px;margin:0 0 4px}h2{font-size:18px;margin:28px 0 8px}p{margin:8px 0}.sub{opacity:.7;margin-bottom:24px}\
 .card{background:#1f2229;border:1px solid #2c303a;border-radius:10px;padding:4px 18px 12px;margin:14px 0}\
-li{margin:6px 0}code{background:#2a2e38;padding:1px 6px;border-radius:5px}a{color:#6ea8ff}.btn{display:inline-block;background:#6ea8ff;color:#10131a;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600}</style>";
+li{margin:6px 0}code{background:#2a2e38;padding:1px 6px;border-radius:5px}a{color:#6ea8ff}.btn{display:inline-block;background:#6ea8ff;color:#10131a;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600}\
+@media (prefers-color-scheme:light){body{background:#fafafa;color:#1c1e22}.card{background:#fff;border-color:#dcdfe4}code{background:#eceef2}a{color:#1d5fd1}}</style>";
 
 /// The page shown the first time Pteron opens.
 pub(crate) fn welcome_html() -> String {

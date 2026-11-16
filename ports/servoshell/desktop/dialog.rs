@@ -27,9 +27,10 @@ pub enum Dialog {
         dialog: EguiFileDialog,
         maybe_picker: Option<FilePicker>,
     },
-    Alert(Option<AlertDialog>),
-    Confirm(Option<ConfirmDialog>),
-    Prompt(Option<PromptDialog>),
+    /// (Pteron: the second field says where the box comes from.)
+    Alert(Option<AlertDialog>, PageBox),
+    Confirm(Option<ConfirmDialog>, PageBox),
+    Prompt(Option<PromptDialog>, PageBox),
     Authentication {
         username: String,
         password: String,
@@ -58,6 +59,13 @@ pub enum Dialog {
     },
 }
 
+/// Pteron: where an alert, confirm or prompt box comes from, and (from a page's second box on)
+/// the switch that stops that page opening more.
+pub struct PageBox {
+    site: String,
+    block: Option<std::rc::Rc<std::cell::Cell<bool>>>,
+}
+
 impl Dialog {
     pub fn new_file_dialog(file_picker: FilePicker) -> Self {
         let mut dialog = EguiFileDialog::new();
@@ -82,11 +90,12 @@ impl Dialog {
         }
     }
 
-    pub fn new_simple_dialog(dialog: SimpleDialog) -> Self {
+    pub fn new_simple_dialog(dialog: SimpleDialog, site: String, block: Option<std::rc::Rc<std::cell::Cell<bool>>>) -> Self {
+        let site = PageBox { site, block };
         match dialog {
-            SimpleDialog::Alert(alert_dialog) => Self::Alert(Some(alert_dialog)),
-            SimpleDialog::Confirm(confirm_dialog) => Self::Confirm(Some(confirm_dialog)),
-            SimpleDialog::Prompt(prompt_dialog) => Self::Prompt(Some(prompt_dialog)),
+            SimpleDialog::Alert(alert_dialog) => Self::Alert(Some(alert_dialog), site),
+            SimpleDialog::Confirm(confirm_dialog) => Self::Confirm(Some(confirm_dialog), site),
+            SimpleDialog::Prompt(prompt_dialog) => Self::Prompt(Some(prompt_dialog), site),
         }
     }
 
@@ -98,11 +107,24 @@ impl Dialog {
         }
     }
 
-    pub fn new_permission_request_dialog(permission_request: PermissionRequest) -> Self {
-        let message = format!(
-            "Do you want to grant permission for {:?}?",
-            permission_request.feature()
-        );
+    pub fn new_permission_request_dialog(permission_request: PermissionRequest, site: String) -> Self {
+        // Pteron: say plainly who asks for what.
+        use servo::PermissionFeature as F;
+        let what = match permission_request.feature() {
+            F::Geolocation => "know your location",
+            F::Notifications | F::Push => "show notifications",
+            F::Camera => "use your camera",
+            F::Microphone => "use your microphone",
+            F::Speaker => "choose your speakers",
+            F::Midi => "use your MIDI devices",
+            F::DeviceInfo => "see which cameras and microphones you have",
+            F::BackgroundSync => "keep working in the background",
+            F::Bluetooth => "use Bluetooth devices",
+            F::PersistentStorage => "keep its data on this computer permanently",
+            F::ScreenWakeLock(_) => "keep your screen on",
+            F::Gamepad => "use your game controllers",
+        };
+        let message = format!("{site} wants to {what}. Allow it?");
         Dialog::Permission {
             message,
             request: Some(permission_request),
@@ -197,14 +219,14 @@ impl Dialog {
                 }
                 matches!(action, DialogAction::Continue)
             },
-            Dialog::Alert(maybe_alert_dialog) => {
+            Dialog::Alert(maybe_alert_dialog, site) => {
                 let Some(alert_dialog) = maybe_alert_dialog else {
                     return false;
                 };
 
                 let mut is_open = true;
                 Modal::new("Alert".into()).show(ctx, |ui| {
-                    make_dialog_label(alert_dialog.message(), ui, None);
+                    make_dialog_label(site, alert_dialog.message(), ui, None);
                     egui::Sides::new().show(
                         ui,
                         |_ui| {},
@@ -223,14 +245,14 @@ impl Dialog {
                 }
                 is_open
             },
-            Dialog::Confirm(maybe_confirm_dialog) => {
+            Dialog::Confirm(maybe_confirm_dialog, site) => {
                 let Some(confirm_dialog) = maybe_confirm_dialog else {
                     return false;
                 };
 
                 let mut dialog_action = DialogAction::Continue;
                 Modal::new("Confirm".into()).show(ctx, |ui| {
-                    make_dialog_label(confirm_dialog.message(), ui, None);
+                    make_dialog_label(site, confirm_dialog.message(), ui, None);
                     egui::Sides::new().show(
                         ui,
                         |_ui| {},
@@ -265,7 +287,7 @@ impl Dialog {
                     DialogAction::Continue => true,
                 }
             },
-            Dialog::Prompt(maybe_prompt_dialog) => {
+            Dialog::Prompt(maybe_prompt_dialog, site) => {
                 let Some(prompt_dialog) = maybe_prompt_dialog else {
                     return false;
                 };
@@ -273,7 +295,7 @@ impl Dialog {
                 let mut dialog_action = DialogAction::Continue;
                 Modal::new("Prompt".into()).show(ctx, |ui| {
                     let mut prompt_text = prompt_dialog.current_value().to_owned();
-                    make_dialog_label(prompt_dialog.message(), ui, Some(&mut prompt_text));
+                    make_dialog_label(site, prompt_dialog.message(), ui, Some(&mut prompt_text));
                     egui::Sides::new().show(
                         ui,
                         |_ui| {},
@@ -321,7 +343,7 @@ impl Dialog {
 
                     if let Some(request) = request {
                         let url =
-                            egui::RichText::new(request.url().origin().unicode_serialization());
+                            egui::RichText::new(request.url().origin().ascii_serialization());
                         frame.content_ui.heading(url);
                     }
 
@@ -369,7 +391,7 @@ impl Dialog {
                 let mut is_open = true;
                 let modal = Modal::new("permission".into());
                 modal.show(ctx, |ui| {
-                    make_dialog_label(message, ui, None);
+                    make_dialog_label(&PageBox { site: String::new(), block: None }, message, ui, None);
                     egui::Sides::new().show(
                         ui,
                         |_ui| {},
@@ -478,7 +500,7 @@ impl Dialog {
                 position.min.y += toolbar_offset.0 as i32;
                 position.max.y += toolbar_offset.0 as i32;
                 // Pteron: a side bar to the left of the page moves the page to the right.
-                let inset = crate::desktop::sidebar::left_inset() as i32;
+                let inset = crate::desktop::sidebar::popup_inset() as i32;
                 position.min.x += inset;
                 position.max.x += inset;
                 let area = egui::Area::new(egui::Id::new("select-window"))
@@ -606,7 +628,7 @@ impl Dialog {
                 position.min.y += toolbar_offset.0 as i32;
                 position.max.y += toolbar_offset.0 as i32;
                 // Pteron: a side bar to the left of the page moves the page to the right.
-                let inset = crate::desktop::sidebar::left_inset() as i32;
+                let inset = crate::desktop::sidebar::popup_inset() as i32;
                 position.min.x += inset;
                 position.max.x += inset;
                 let area = egui::Area::new(egui::Id::new("select-window"))
@@ -658,7 +680,7 @@ impl Dialog {
                     let mut position = context_menu.position();
                     position.min.y += toolbar_offset.0 as i32;
                     position.max.y += toolbar_offset.0 as i32;
-                    let inset = crate::desktop::sidebar::left_inset() as i32;
+                    let inset = crate::desktop::sidebar::popup_inset() as i32;
                     position.min.x += inset;
                     position.max.x += inset;
 
@@ -763,12 +785,25 @@ impl Dialog {
     }
 }
 
-fn make_dialog_label(message: &str, ui: &mut egui::Ui, input_text: Option<&mut String>) {
+fn make_dialog_label(from: &PageBox, message: &str, ui: &mut egui::Ui, input_text: Option<&mut String>) {
     let mut frame = egui::Frame::default().inner_margin(10.0).begin(ui);
     frame.content_ui.set_min_width(MINIMUM_UI_ELEMENT_WIDTH);
-    frame.content_ui.label(message);
+    // Pteron: say who is talking, so a page cannot pass its box off as Pteron's or another site's.
+    if !from.site.is_empty() {
+        frame.content_ui.label(egui::RichText::new(format!("{} says:", from.site)).strong());
+        frame.content_ui.add_space(4.0);
+    }
+    // (Very long messages are cut, so the buttons always stay on screen.)
+    let shown: String = message.chars().take(1500).collect();
+    frame.content_ui.label(shown);
     if let Some(input_text) = input_text {
         frame.content_ui.text_edit_singleline(input_text);
+    }
+    if let Some(block) = &from.block {
+        let mut on = block.get();
+        if frame.content_ui.checkbox(&mut on, "Don't let this page open more boxes").changed() {
+            block.set(on);
+        }
     }
     frame.end(ui);
 }

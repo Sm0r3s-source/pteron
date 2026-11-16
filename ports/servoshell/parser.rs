@@ -40,6 +40,10 @@ pub fn get_default_url(
     if !custom_home.is_empty() && !custom_home.contains(':') {
         custom_home = format!("https://{custom_home}");
     }
+    // Pteron: the home page must be a real address (not javascript: or data:).
+    if !["https://", "http://", "servo:", "file://"].iter().any(|p| custom_home.starts_with(p)) {
+        custom_home.clear();
+    }
     let homepage = if settings.startup == "custom" && !custom_home.is_empty() {
         custom_home.as_str()
     } else if is_old_default(&preferences.homepage) {
@@ -97,7 +101,12 @@ pub(crate) fn location_bar_input_to_url(request: &str, searchpage: &str) -> Opti
     if let Some(url) = crate::pteron::expand_keyword(request).and_then(|u| ServoUrl::parse(&u).ok()) {
         return Some(url);
     }
-    let input_url = ServoUrl::parse(request).ok();
+    // Pteron: a javascript: address typed or pasted into the address bar would run in the open
+    // page (a trick: "paste this to get ..."). It is searched for instead, as in other browsers.
+    let input_url = ServoUrl::parse(request).ok().filter(|url| url.scheme() != "javascript");
+    if input_url.is_none() && request.get(..11).is_some_and(|s| s.eq_ignore_ascii_case("javascript:")) {
+        return try_as_search_page(request, searchpage);
+    }
     if let Some(url) = input_url {
         match (url.scheme(), url.host(), url.to_file_path()) {
             (scheme, None, Err(_)) if is_localhost(scheme) || is_domain_like(scheme) => {

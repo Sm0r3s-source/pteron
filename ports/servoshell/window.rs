@@ -191,6 +191,13 @@ pub(crate) struct ServoShellWindow {
     media_playing: RefCell<HashSet<WebViewId>>,
     /// Pteron: pinned tabs.
     pinned: RefCell<HashSet<WebViewId>>,
+    /// Pteron: tabs the user asked to keep awake (they never go to sleep).
+    awake: RefCell<HashSet<WebViewId>>,
+    /// Pteron: split view. Where the divider is (0 to 1 across the page area), and the two
+    /// tabs on screen with the left and right edge of each, in device pixels from the page
+    /// area's left edge (set by the interface every frame).
+    split_ratio: Cell<f32>,
+    panes: Cell<Option<[(WebViewId, f32, f32); 2]>>,
     /// Pteron: when the session file was last refreshed.
     last_session_save: Cell<Option<Instant>>,
     /// Pteron: addresses of recently closed tabs, newest last (Ctrl+Shift+T reopens one).
@@ -221,6 +228,9 @@ impl ServoShellWindow {
             out_of_sight: Default::default(),
             media_playing: Default::default(),
             pinned: Default::default(),
+            awake: Default::default(),
+            split_ratio: Cell::new(0.5),
+            panes: Cell::new(None),
             last_session_save: Default::default(),
             closed_tabs: Default::default(),
         }
@@ -389,15 +399,76 @@ impl ServoShellWindow {
         TAB_ORDER.with(|order| *order.borrow_mut() = ids);
     }
 
+    /// Pteron: is this tab kept awake?
+    pub(crate) fn is_awake(&self, id: WebViewId) -> bool {
+        self.awake.borrow().contains(&id)
+    }
+
+    /// Pteron: keep a tab awake (it never goes to sleep), or stop doing so.
+    pub(crate) fn toggle_awake(&self, id: WebViewId) {
+        let mut awake = self.awake.borrow_mut();
+        if !awake.remove(&id) {
+            awake.insert(id);
+        }
+        drop(awake);
+        self.set_needs_update();
+    }
+
+    /// Pteron: the split view pair (left, right), and the pair while it is on screen.
+    pub(crate) fn split(&self) -> Option<(WebViewId, WebViewId)> {
+        self.webview_collection.borrow().split()
+    }
+
+    pub(crate) fn shown_split(&self) -> Option<(WebViewId, WebViewId)> {
+        self.webview_collection.borrow().shown_split()
+    }
+
+    /// Pteron: show `other` beside the active tab (the active tab on the left), or end split view.
+    pub(crate) fn set_split_with(&self, other: Option<WebViewId>) {
+        let active = self.webview_collection.borrow().active_id();
+        // The tab leaving the screen counts as used until now.
+        if let Some((left, right)) = self.split() {
+            let now = Instant::now();
+            self.last_active.borrow_mut().extend([(left, now), (right, now)]);
+        }
+        self.webview_collection.borrow_mut().set_split(active.zip(other));
+        self.set_needs_update();
+        self.set_needs_repaint();
+    }
+
+    pub(crate) fn split_ratio(&self) -> f32 {
+        self.split_ratio.get()
+    }
+
+    pub(crate) fn set_split_ratio(&self, ratio: f32) {
+        self.split_ratio.set(ratio.clamp(0.15, 0.85));
+    }
+
+    pub(crate) fn set_panes(&self, panes: Option<[(WebViewId, f32, f32); 2]>) {
+        self.panes.set(panes);
+    }
+
+    /// Pteron: in split view, the tab whose page is at `x` (device pixels from the page area's
+    /// left edge).
+    pub(crate) fn webview_at(&self, x: f32) -> Option<WebView> {
+        let (id, ..) = self.panes.get()?.into_iter().find(|(_, min, max)| x >= *min && x < *max)?;
+        self.webview_by_id(id)
+    }
+
     pub(crate) fn activate_webview(&self, webview_id: WebViewId) {
         // Pteron: remember when the tab we are leaving went to the background.
         let previous = self.webview_collection.borrow().active_id();
         if let Some(previous) = previous &&
             previous != webview_id
         {
-            self.last_active
-                .borrow_mut()
-                .insert(previous, Instant::now());
+            let now = Instant::now();
+            let mut last_active = self.last_active.borrow_mut();
+            last_active.insert(previous, now);
+            // (Both tabs of a split view were on screen until now.)
+            if let Some((left, right)) = self.shown_split() {
+                last_active.extend([(left, now), (right, now)]);
+            }
+            drop(last_active);
             // The engine then shrinks the memory of pages that are in the background.
             self.schedule_memory_cleanup(Duration::from_secs(60));
         }
@@ -466,6 +537,7 @@ impl ServoShellWindow {
         self.restore_scroll.borrow_mut().remove(&webview_id);
         self.media_playing.borrow_mut().remove(&webview_id);
         self.pinned.borrow_mut().remove(&webview_id);
+        self.awake.borrow_mut().remove(&webview_id);
         self.platform_window
             .dismiss_embedder_controls_for_webview(webview_id);
         self.schedule_memory_cleanup(Duration::from_secs(2));
@@ -501,14 +573,18 @@ impl ServoShellWindow {
         if self.out_of_sight.replace(hidden) == hidden {
             return;
         }
-        let Some(webview) = self.active_webview() else {
-            return;
+        // (In split view both pages are on screen.)
+        let shown: Vec<WebViewId> = match self.shown_split() {
+            Some((left, right)) => vec![left, right],
+            None => self.active_webview().iter().map(|webview| webview.id()).collect(),
         };
-        if !hidden {
-            webview.show();
-        } else if !self.media_playing.borrow().contains(&webview.id()) {
-            webview.hide();
-            self.schedule_memory_cleanup(Duration::from_secs(30));
+        for webview in shown.into_iter().filter_map(|id| self.webview_by_id(id)) {
+            if !hidden {
+                webview.show();
+            } else if !self.media_playing.borrow().contains(&webview.id()) {
+                webview.hide();
+                self.schedule_memory_cleanup(Duration::from_secs(30));
+            }
         }
     }
 
@@ -700,9 +776,15 @@ impl ServoShellWindow {
         let mut idle: Vec<(WebViewId, Duration)> = {
             let last_active = self.last_active.borrow();
             let playing = self.media_playing.borrow();
+            // Not the other page of a split view on screen, and not a tab kept awake.
+            let shown = self.shown_split();
+            let awake = self.awake.borrow();
             self.webviews()
                 .into_iter()
                 .filter(|(id, _)| Some(*id) != active_id && !playing.contains(id))
+                .filter(|(id, _)| {
+                    !awake.contains(id) && !shown.is_some_and(|(left, right)| left == *id || right == *id)
+                })
                 .filter(|(_, webview)| {
                     webview.url().is_some_and(|url| matches!(url.scheme(), "http" | "https"))
                 })
@@ -789,8 +871,13 @@ impl ServoShellWindow {
         webview: WebView,
         embedder_control: EmbedderControl,
     ) {
-        self.platform_window
-            .show_embedder_control(webview.id(), embedder_control);
+        // Pteron: alert, confirm and prompt boxes say which site they come from.
+        match embedder_control {
+            EmbedderControl::SimpleDialog(dialog) => {
+                self.platform_window.show_page_dialog(webview.id(), dialog, site_of(&webview));
+            },
+            other => self.platform_window.show_embedder_control(webview.id(), other),
+        }
         self.set_needs_update();
         self.set_needs_repaint();
     }
@@ -1022,7 +1109,12 @@ pub(crate) trait PlatformWindow {
         _request: BluetoothDeviceSelectionRequest,
     ) {
     }
-    fn show_permission_dialog(&self, _: WebViewId, _: PermissionRequest) {}
+    /// `site`: the address of the page asking (Pteron says who is asking).
+    fn show_permission_dialog(&self, _: WebViewId, _: PermissionRequest, _site: String) {}
+    /// An alert, confirm or prompt box from the page; `site` says who it is from.
+    fn show_page_dialog(&self, id: WebViewId, dialog: servo::SimpleDialog, _site: String) {
+        self.show_embedder_control(id, EmbedderControl::SimpleDialog(dialog));
+    }
     fn show_http_authentication_dialog(&self, _: WebViewId, _: AuthenticationRequest) {}
 
     fn notify_input_event_handled(
@@ -1050,4 +1142,16 @@ pub(crate) trait PlatformWindow {
     }
 
     fn notify_accessibility_tree_update(&self, _: WebView, _: accesskit::TreeUpdate) {}
+}
+
+/// Pteron: the site a tab shows, as people read it ("example.com"), for dialogs that say who
+/// is asking. Look-alike letters stay in their real (xn--) form.
+pub(crate) fn site_of(webview: &WebView) -> String {
+    webview
+        .url()
+        .map(|url| match url.host_str() {
+            Some(host) => host.trim_start_matches("www.").to_string(),
+            None => url.scheme().to_string(),
+        })
+        .unwrap_or_else(|| "This page".to_string())
 }

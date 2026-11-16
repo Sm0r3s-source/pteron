@@ -80,6 +80,8 @@ pub(crate) struct Look {
     pub site_styles: Vec<SiteStyle>,
     /// The user's own tiles on the new tab page.
     pub shortcuts: Vec<Shortcut>,
+    /// Keep the system's title bar instead of Pteron's own window top.
+    pub system_titlebar: bool,
 }
 
 impl Default for Look {
@@ -102,6 +104,7 @@ impl Default for Look {
             dark_skip: Vec::new(),
             site_styles: Vec::new(),
             shortcuts: Vec::new(),
+            system_titlebar: false,
         }
     }
 }

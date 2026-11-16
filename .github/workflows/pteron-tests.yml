@@ -3,6 +3,9 @@ name: pteron-tests
 on:
   push:
   pull_request:
+  # Once a week, so a newly published hole in a dependency shows up even without a push.
+  schedule:
+    - cron: "17 6 * * 1"
 
 jobs:
   unit:
@@ -18,3 +21,17 @@ jobs:
         run: test -f ports/servoshell/update_key.pub || echo "AAAA" > ports/servoshell/update_key.pub
       - name: Unit tests
         run: cargo test --manifest-path pteron_ci/Cargo.toml
+
+  # Every Rust package Pteron and Servo use, checked against the RustSec advisory database.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      # RUSTSEC-2026-0459 (SQLite inside libsqlite3-sys) needs crafted database files placed in
+      # the user's own profile folder; the fixed version needs a newer rusqlite than Servo's
+      # sea-query-rusqlite allows. Reviewed for build 67.
+      - name: Check dependencies
+        run: cargo audit --file Cargo.lock --ignore RUSTSEC-2026-0459

@@ -1050,6 +1050,14 @@ fn privacy_section(
             if ui.checkbox(&mut on, "Offer to save passwords").changed() {
                 crate::passwords::set_enabled(on);
             }
+            let mut ask = crate::passwords::asks_windows();
+            if ui
+                .checkbox(&mut ask, "Ask for my Windows PIN, fingerprint or face before filling a password")
+                .on_hover_text("Uses Windows Hello. One confirmation counts for five minutes.")
+                .changed()
+            {
+                crate::passwords::set_asks_windows(ask);
+            }
             let logins = crate::passwords::list();
             ui.add_space(6.0);
             if logins.is_empty() {
@@ -1158,6 +1166,54 @@ fn privacy_section(
                 .changed();
             *changed |= ui
                 .checkbox(&mut settings.privacy_signals, "Send Do Not Track and Global Privacy Control (after a restart)")
+                .changed();
+        },
+    );
+    card(
+        ui,
+        "Dangerous sites",
+        Some(
+            "Warns before sites known for phishing (fake sign-in pages) or spreading harmful \
+             programs, and does not load anything from them. Uses free public lists, refreshed \
+             weekly and checked on your computer: the sites you visit are not sent anywhere.",
+        ),
+        "dangerous phishing malware scam fraud safe browsing warning sites",
+        |ui| {
+            *changed |= ui
+                .checkbox(&mut settings.block_dangerous_sites, "Warn me about dangerous sites")
+                .changed();
+            if settings.block_dangerous_sites {
+                ui.label(RichText::new(crate::danger::status()).small().weak());
+            }
+        },
+    );
+    card(
+        ui,
+        "Third-party cookies",
+        Some(
+            "Cookies are not sent with requests that another site causes: frames, pictures and \
+             scripts embedded from elsewhere. Stops most tracking across sites; some sign-in boxes \
+             and comment sections embedded from other sites stop working.",
+        ),
+        "third party cookies cross site tracking block privacy",
+        |ui| {
+            *changed |= ui
+                .checkbox(&mut settings.block_third_party_cookies, "Block third-party cookies (after a restart)")
+                .changed();
+        },
+    );
+    card(
+        ui,
+        "Strict security",
+        Some(
+            "Runs JavaScript without its speed-up compiler, the part of a browser engine that most \
+             attacks go through. Pages with heavy scripts get slower and WebAssembly (some games, \
+             editors and video calls) stops working.",
+        ),
+        "strict security jit javascript compiler webassembly wasm safe attack harden lockdown",
+        |ui| {
+            *changed |= ui
+                .checkbox(&mut settings.strict_security, "Strict security (after a restart)")
                 .changed();
         },
     );
@@ -1582,6 +1638,11 @@ fn layout_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                 ui.add_space(6.0);
                 ui.label(RichText::new(*description).weak());
             }
+            ui.add_space(8.0);
+            changed |= ui
+                .checkbox(&mut settings.look.system_titlebar, "Use the system's title bar")
+                .on_hover_text("Off: Pteron draws the top of its window itself, with the tabs (or the sidebar) holding the window's buttons")
+                .changed();
         },
     );
     let look = &mut settings.look;

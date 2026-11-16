@@ -17,6 +17,9 @@ pub fn main() {
     // log_panics::init()?
     panic::set_hook(Box::new(panic_hook::panic_hook));
 
+    // Pteron: keep settings, history and cookies away from other users of the computer.
+    crate::util::lock_down_folders();
+
     // Pteron: hand the hardware video decoding choice to the media backend.
     // Safe here: nothing else is running yet.
     unsafe {

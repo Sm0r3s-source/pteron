@@ -145,7 +145,7 @@ impl App {
         )));
 
         user_content_manager.add_script(Rc::new(UserScript::new(
-            crate::passwords::SCRIPT.to_string(),
+            crate::passwords::script(),
             None,
         )));
 

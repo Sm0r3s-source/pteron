@@ -19,8 +19,8 @@ use std::pin::Pin;
 use headers::{ContentType, HeaderMapExt};
 use servo::UserAgentPlatform;
 use servo::protocol_handler::{
-    DoneChannel, FetchContext, NetworkError, ProtocolHandler, Request, ResourceFetchTiming,
-    Response, ResponseBody,
+    Destination, DoneChannel, FetchContext, NetworkError, Origin, ProtocolHandler, Request,
+    RequestMode, ResourceFetchTiming, Response, ResponseBody,
 };
 
 use crate::desktop::protocols::resource::ResourceProtocolHandler;
@@ -46,6 +46,12 @@ impl ProtocolHandler for ServoProtocolHandler {
     ) -> Pin<Box<dyn Future<Output = Response> + Send>> {
         let url = request.current_url();
 
+        if !allowed(request, url.path()) {
+            return Box::pin(std::future::ready(Response::network_error(
+                NetworkError::ResourceLoadError("Not available to web pages".to_owned()),
+            )));
+        }
+
         match url.path() {
             "config" => ResourceProtocolHandler::response_for_path(
                 request,
@@ -61,6 +67,7 @@ impl ProtocolHandler for ServoProtocolHandler {
             "known-issues" => html_response(request, crate::pteron::known_issues_html()),
             "http-warning" => html_response(request, crate::secure::warning_html(url.as_url())),
             "http-continue" => html_response(request, crate::secure::continue_html(url.as_url())),
+            "danger-continue" => html_response(request, crate::danger::continue_html(url.as_url())),
 
             "preferences" => ResourceProtocolHandler::response_for_path(
                 request,
@@ -95,6 +102,23 @@ impl ProtocolHandler for ServoProtocolHandler {
             ))),
         }
     }
+}
+
+/// Pteron: what may load a `servo:` page. These pages hold private things (the new tab page lists
+/// shortcuts, bookmarks and most visited sites, and secrets that let it change them), so:
+/// - no web page may read one (fetch, XHR); the config page may read the two plain answers it asks for;
+/// - no page may put one in a frame;
+/// - a web page may open only the harmless ones in a tab; the rest open only from Pteron itself
+///   or from another `servo:` page (whose origin is opaque).
+fn allowed(request: &Request, path: &str) -> bool {
+    let from_web_page = matches!(request.origin, Origin::Origin(_)) && !request.origin.is_opaque();
+    if request.mode != RequestMode::Navigate {
+        return !from_web_page && matches!(path, "experimental-preferences" | "default-user-agent");
+    }
+    if request.destination != Destination::Document {
+        return false;
+    }
+    !from_web_page || matches!(path, "newtab" | "welcome" | "known-issues" | "http-warning" | "compat" | "danger-continue")
 }
 
 fn html_response(

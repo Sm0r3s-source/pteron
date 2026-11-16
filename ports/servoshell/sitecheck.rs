@@ -5,8 +5,19 @@
 //! and the response headers (it can tell a Cloudflare challenge from a broken page). The
 //! result is drawn on the page itself and also saved to the crash log.
 
-/// Console messages starting with this are ours (never shown in the console).
-pub(crate) const PREFIX: &str = "__pteron_check__";
+/// Console messages starting with this (plus a code that changes every run, so a page cannot
+/// write into the crash log by imitating them) are ours and never shown in the console.
+const PREFIX: &str = "__pteron_check__";
+
+fn prefix() -> &'static str {
+    static P: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    P.get_or_init(|| format!("{PREFIX}{}_", crate::util::random_token()))
+}
+
+/// The report script with this run's code in it.
+pub(crate) fn report_js() -> String {
+    REPORT_JS.replace(PREFIX, prefix())
+}
 
 /// Runs on every page: remembers the last errors so the report can show them.
 pub(crate) const ERR_SCRIPT: &str = r#"(function(){try{
@@ -18,7 +29,7 @@ window.addEventListener('unhandledrejection',function(e){var r=e.reason;add('pro
 }catch(e){}})();"#;
 
 /// Run on demand by the tab menu item. Draws a box on the page and logs the same text.
-pub(crate) const REPORT_JS: &str = r#"(function(){try{
+const REPORT_JS: &str = r#"(function(){try{
 var out=[];
 function p(s){out.push(s);}
 p('URL: '+location.href);
@@ -79,7 +90,7 @@ done('Response: HTTP '+r.status+', server '+g('server')+', cf-mitigated '+g('cf-
 
 /// Called for every console message. True when it was ours (and has been saved).
 pub(crate) fn handle_console(message: &str) -> bool {
-    let Some(report) = message.strip_prefix(PREFIX) else { return false };
+    let Some(report) = message.strip_prefix(prefix()) else { return false };
     crate::crashlog::note(&format!("page check:\n{}", report.trim()));
     true
 }
@@ -90,7 +101,9 @@ mod tests {
 
     #[test]
     fn only_our_messages_are_taken() {
-        assert!(handle_console("__pteron_check__URL: x"));
+        assert!(handle_console(&format!("{}URL: x", prefix())));
+        // A page that imitates the message without this run's code is ignored.
+        assert!(!handle_console("__pteron_check__URL: x"));
         assert!(!handle_console("hello"));
         assert!(!handle_console("__pteron_pw__ something"));
     }
@@ -100,5 +113,6 @@ mod tests {
         assert!(!REPORT_JS.contains("\"#"));
         assert!(!ERR_SCRIPT.contains("\"#"));
         assert!(REPORT_JS.contains(PREFIX));
+        assert!(report_js().contains(prefix()) && report_js().contains("__pteron_check_box"));
     }
 }

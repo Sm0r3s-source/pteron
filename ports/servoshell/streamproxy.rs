@@ -1073,14 +1073,15 @@ fn fetch_batch(url: &str, wanted: &[(u64, u64)], parallel: usize) -> Result<Vec<
 /// Download the listed ranges. Pieces that did not arrive in full are `None`.
 fn curl_group(url: &str, group: &[(u64, u64)], proto: &str, parallel: usize) -> Result<Vec<Option<Vec<u8>>>, String> {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::util::private_temp(&format!(
         "pteron_dl_{}_{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let result = (|| {
-        let quote = |t: &str| t.replace('\\', "/").replace('"', "");
+        // (No quotes, backslashes or line breaks: nothing in an address can add a curl option.)
+        let quote = |t: &str| t.replace('\\', "/").replace(|c: char| c == '"' || c.is_control(), "");
         let mut config = String::new();
         for (i, (start, len)) in group.iter().enumerate() {
             if *len == 0 {

@@ -28,6 +28,8 @@ mod sitecheck;
 mod compat;
 #[path = "../../ports/servoshell/memsaver.rs"]
 mod memsaver;
+#[path = "../../ports/servoshell/danger.rs"]
+mod danger;
 #[path = "../../ports/servoshell/filters.rs"]
 mod filters;
 #[path = "../../ports/servoshell/privacy.rs"]

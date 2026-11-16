@@ -344,15 +344,67 @@ pub fn determine_requests_referrer(
     }
 }
 
+/// Pteron: which cookies a request may carry, from their `SameSite` attribute (Servo sent every
+/// cookie everywhere, so `SameSite=Lax`/`Strict`, the usual defence against cross-site request
+/// forgery, did nothing). Cookies without the attribute keep the old behaviour, as in Firefox and
+/// Safari.
+#[derive(Clone, Copy, PartialEq)]
+enum SameSiteContext {
+    /// Same site, or opened by the user (typed address, bookmark).
+    SameSite,
+    /// Another site sent the user here with a top-level GET: `Lax` cookies, not `Strict`.
+    CrossSiteNavigation,
+    /// Any other request caused by another site: neither `Lax` nor `Strict` cookies.
+    CrossSite,
+}
+
+fn same_site_context(request: &Request) -> SameSiteContext {
+    let initiator = match &request.origin {
+        Origin::Client => return SameSiteContext::SameSite,
+        Origin::Origin(origin) => origin,
+    };
+    let navigation = request.mode == RequestMode::Navigate;
+    let top_level = navigation && request.destination == Destination::Document;
+    // A top-level load with an opaque origin and no referrer is the user's own (address bar,
+    // bookmarks, Pteron's pages).
+    if top_level && !initiator.is_tuple() && matches!(request.referrer, Referrer::NoReferrer) {
+        return SameSiteContext::SameSite;
+    }
+    let cross = !initiator.is_tuple() ||
+        request.url_list.iter().any(|url| !is_same_site(initiator, &url.origin()));
+    if !cross {
+        SameSiteContext::SameSite
+    } else if top_level && matches!(request.method, Method::GET | Method::HEAD) {
+        SameSiteContext::CrossSiteNavigation
+    } else {
+        SameSiteContext::CrossSite
+    }
+}
+
 fn set_request_cookies(
     url: &ServoUrl,
     headers: &mut HeaderMap,
     cookie_jar: &RwLock<CookieStorage>,
+    context: SameSiteContext,
 ) {
+    use cookie::SameSite;
     let mut cookie_jar = cookie_jar.write();
     cookie_jar.remove_expired_cookies_for_url(url);
-    if let Some(cookie_list) = cookie_jar.cookies_for_url(url, CookieSource::HTTP) &&
-        let Ok(cookie_list_header_value) = HeaderValue::from_bytes(cookie_list.as_bytes())
+    let list = cookie_jar
+        .cookies_data_for_url(url, CookieSource::HTTP)
+        .filter(|cookie| match (cookie.same_site(), context) {
+            (_, SameSiteContext::SameSite) => true,
+            // Pteron's "block third-party cookies" setting.
+            (_, SameSiteContext::CrossSite) if pref!(network_block_third_party_cookies) => false,
+            (Some(SameSite::Strict), _) => false,
+            (Some(SameSite::Lax), SameSiteContext::CrossSite) => false,
+            _ => true,
+        })
+        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if !list.is_empty() &&
+        let Ok(cookie_list_header_value) = HeaderValue::from_bytes(list.as_bytes())
     {
         headers.insert(header::COOKIE, cookie_list_header_value);
     }
@@ -1528,10 +1580,12 @@ async fn http_network_or_cache_fetch(
         // Substep 1
         // TODO http://mxr.mozilla.org/servo/source/components/net/http_loader.rs#504
         // XXXManishearth http_loader has block_cookies: support content blocking here too
+        let same_site = same_site_context(http_request);
         set_request_cookies(
             &current_url,
             &mut http_request.headers,
             &context.state.cookie_jar,
+            same_site,
         );
         // Substep 2
         if !http_request.headers.contains_key(header::AUTHORIZATION) {
