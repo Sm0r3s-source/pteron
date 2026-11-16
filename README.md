@@ -22,8 +22,14 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 - Tabs sleep after a while and wake when clicked; session restore brings tabs back asleep
 - **Split view**: right-click a tab, **Show beside the current tab**; drag the bar between the two pages
   (double-click it to share the space evenly). Both pages stay awake while they are on screen
-- Right-click menu on tabs: reload, duplicate, pin, **Keep awake** (the tab never goes to sleep, for a
-  page that must stay connected), split view, open in the default browser, close other tabs or the ones after it
+- Right-click menu on tabs: reload, duplicate, **Mute tab**, **Take screenshot** (a PNG in your Pictures
+  folder), pin, **Keep awake** (the tab never goes to sleep, for a page that must stay connected), split view,
+  open in the default browser, close other tabs or the ones after it
+- In split view a compatibility tab shows its page in either half (before, only while it was the active tab)
+- A tab playing sound shows a speaker; click it to mute the tab (and again to unmute)
+- **History** (Ctrl+H, or the clock button): every page you visited, by day, with search and a remove button
+  per page
+- The reload button turns into a stop button while a page loads
 - Find in page, reading mode (the **Aa** button), popup blocking
 - Address bar shortcuts: `g`, `ddg`, `yt`, `w`, `gh`, `maps`, `r`, and `i` for pictures
   (for example `yt lofi`, `i red car`)
@@ -46,15 +52,30 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 **Plume (YouTube) and Plume Music**
 - YouTube search, channels and videos open in simple Pteron pages with a built-in player (up to
   1080p60, H.264), because Servo has no Media Source Extensions yet
+- Videos start faster (the first 30 seconds play while the rest loads; "Up next" loads after the player
+  shows; recent videos are remembered for 30 minutes)
+- **Subscriptions without an account**: subscribe on a video or channel, and the home page shows their newest
+  videos (from YouTube's public feeds); import a Google Takeout CSV or an OPML file, export both
+- **Chapters**: times in a description are links, and chapters show as marks on the seek bar with their
+  name when you point at it
+- **Subtitles**: YouTube's captions (also automatic ones) drawn over the video, in full screen too; the
+  language you pick is remembered; press **C** to switch them on or off
+- **Loop**, **Autoplay next**, and **Audio only** in the quality list
+- **SponsorBlock** (off by default; Settings, Video): sponsor segments, self-promotion and subscribe
+  reminders are skipped, with an Undo button, and shown on the seek bar
 - Plume Music for listening, with queues, playlists and liked songs
-- Download videos as .mp4 and songs as .mp3 (converted inside Pteron)
+- Plume Music **Radio** (when the queue ends, songs like the last one keep playing), a **sleep timer**
+  (15, 30 or 60 minutes, fading out), and **time-synced lyrics** from lrclib.net (off by default)
+- Download videos as .mp4 and songs as .mp3 (converted inside Pteron, with the video's picture as the
+  cover of the MP3)
 
 **Privacy and security**
 - Ad and tracker blocking: a built-in list of well-known networks, plus optional full EasyList and EasyPrivacy lists (uses 15 to 30 MB more memory)
 - Tracking parts (`utm_*`, `fbclid`, `gclid`, ...) removed from links
 - Do Not Track and Global Privacy Control signals (after a restart)
 - https first: plain http sites are checked for an https version; otherwise a warning page appears
-- Saved passwords on ordinary login forms, locked with your Windows account, kept only on this
+- Saved passwords on ordinary login forms, encrypted (Windows: with your Windows account; Linux: AES-256-GCM
+  under a key in your system keyring, or in a key file only your account can read), kept only on this
   computer, never synced and never included in problem reports
 - Clear history and cache on exit (optional); sync never carries security switches
 - Updates must carry a SHA-256 file and a signature from the author's key, or they are refused
@@ -89,7 +110,7 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 - **Check this page** (tab context menu) writes a small report about what a page is missing
 
 **Compatibility tab**
-- Pages that Servo cannot handle (Cloudflare's browser check and similar) open in your system's own web engine (WebView2 on Windows) inside a normal tab, by themselves, after asking, or never (Settings, Tabs)
+- Pages that Servo cannot handle (Cloudflare's browser check and similar) open in your system's own web engine (WebView2 on Windows, WebKitGTK on Linux) inside a normal tab, by themselves, after asking, or never (Settings, Tabs)
 - Sites you choose, or that switched by themselves, open there from the start; the list is in Settings
 - Experimental: after a site's browser check passes, Pteron can copy the pass cookie to its own engine and close the system engine, so the heavy engine only runs for a few seconds (off by default; if the site does not accept it, the page goes back to a compatibility tab)
 - The engine is started only for such a tab, uses less memory when the tab is hidden, and is closed after a while; it keeps its own sign-ins and does not use the ad blocker or saved passwords
@@ -155,10 +176,12 @@ Things that carry some risk, said plainly:
 - **The installer is not code-signed.** Windows warns about it, and nothing but GitHub's own download link vouches
   for the first copy you install; the `.sha256` file next to it only catches a broken download. From then on, Pteron
   installs an update only if its SHA-256 is signed with the author's key, which is built into Pteron.
-- **Saved passwords** are encrypted with Windows' own protection (DPAPI), tied to your Windows account, in
-  `%APPDATA%\Pteron\passwords.json`. That stops someone who copies the file to another computer or signs in as
-  another user. It does not stop a program running under your account, or a person at your unlocked PC: there is no
-  master password. Passwords are filled only after a click, are never synced and never put in problem reports.
+- **Saved passwords** are encrypted. On Windows with Windows' own protection (DPAPI), tied to your Windows account,
+  in `%APPDATA%\Pteron\passwords.json`. On Linux with AES-256-GCM, under a random key kept in your system keyring
+  (GNOME Keyring or KWallet, through `secret-tool`); with no keyring, the key is in `~/.config/Pteron/passwords.key`,
+  which only your account can read (weaker: anyone who copies both files has the passwords). That stops someone who
+  copies the password file to another computer or signs in as another user. It does not stop a program running under
+  your account, or a person at your unlocked PC: there is no master password. Passwords are filled only after a click, are never synced and never put in problem reports.
 - **The compatibility tab** shows a page in your system's web engine (WebView2 or WebKitGTK) with its own cookies;
   Pteron's ad blocker and saved passwords do not apply there.
 - **Handing a browser check over (experimental, off by default):** after the system engine passes a site's browser
@@ -285,6 +308,7 @@ New files are in `ports/servoshell/`. Some of the main ones:
 |---|---|
 | `desktop/sidebar.rs`, `desktop/settings_page.rs` | The sidebar and the Settings page (egui) |
 | `youtube.rs`, `innertube.rs`, `streamproxy.rs`, `mp4mux.rs` | Plume: YouTube pages, API, local video helper, MP4 muxer |
+| `plume.rs` | Plume extras: up next, subscriptions and feeds, chapters, subtitles, SponsorBlock |
 | `music.rs`, `downloads.rs`, `mp3.rs` | Plume Music, downloads, MP3 conversion |
 | `adblock.rs`, `privacy.rs`, `secure.rs`, `passwords.rs` | Blocking, tracking removal, https, passwords |
 | `sync.rs`, `updater.rs`, `library.rs` | Sync, self-update, bookmarks and history |
@@ -294,7 +318,8 @@ New files are in `ports/servoshell/`. Some of the main ones:
 
 Pteron also makes small changes in Servo's own files (`components/config/prefs.rs`,
 `components/net/http_loader.rs`, `components/servo/servo.rs`, the GStreamer media backend, the
-media controls, the memory allocator in `components/allocator/`, a "collect garbage" message in
+media element's `timeupdate` events (`components/script/dom/html/embedded_content/htmlmediaelement.rs`: they never fired for a video whose page had not asked for `textTracks`), the media controls (`components/script/resources/media-controls.js` and `.css`: chapter and segment marks on the
+seek bar, and the chapter name when you point at it), the memory allocator in `components/allocator/`, a "collect garbage" message in
 `components/constellation/` and `components/shared/constellation/`, the animation frame rate in
 `components/paint/refresh_driver.rs`, the garbage collection of background pages in
 `components/script/event_loop/script_thread.rs`, placing a page in part of the window for split view in
@@ -314,7 +339,7 @@ the MPL-2.0, like the rest of Servo.
 - Strict anti-bot checks, including Cloudflare's "Just a moment" page, cannot be passed by Pteron's own engine; Pteron opens those pages in a compatibility tab instead (see above)
 - Some modern pages look wrong, stay blank or load slowly; the engine does not support every web feature
 - Windows and Linux (the Linux build is new and runs in X11 mode); macOS comes later; no extensions and no private window
-- Saved passwords work on Windows only for now
+- Muting a tab mutes its audio and video elements; sound from the Web Audio API keeps playing
 - Videos play H.264 up to 1080p60; VP9, AV1 and 4K are not supported
 
 The same list, kept up to date, is in the browser at `servo:known-issues`.

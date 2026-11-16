@@ -545,6 +545,20 @@ impl HeadedWindow {
             !modifiers.alt_key()
     }
 
+    /// Pteron: is this key press Ctrl+H (browsing history)?
+    fn is_history_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
+        if event.state != ElementState::Pressed {
+            return false;
+        }
+        let LogicalKey::Character(text) = &event.logical_key else {
+            return false;
+        };
+        text.to_lowercase() == "h" &&
+            (modifiers.control_key() || modifiers.super_key()) &&
+            !modifiers.shift_key() &&
+            !modifiers.alt_key()
+    }
+
     /// Pteron: is this key press Ctrl+F (find in page)?
     fn is_find_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
         if event.state != ElementState::Pressed {
@@ -695,6 +709,17 @@ impl HeadedWindow {
             } if Self::is_reopen_tab_shortcut(key_event, self.modifiers_state.get()) => {
                 // Pteron: Ctrl+Shift+T brings back the tab closed last.
                 window.queue_user_interface_command(UserInterfaceCommand::ReopenClosedTab);
+                self.winit_window.request_redraw();
+                consumed = true;
+            },
+            WindowEvent::KeyboardInput {
+                event: ref key_event,
+                ..
+            } if Self::is_history_shortcut(key_event, self.modifiers_state.get()) => {
+                // Pteron: Ctrl+H opens the browsing history.
+                if let Ok(url) = url::Url::parse("servo:history") {
+                    window.queue_user_interface_command(UserInterfaceCommand::NewTabWithUrl(url));
+                }
                 self.winit_window.request_redraw();
                 consumed = true;
             },

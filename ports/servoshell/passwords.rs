@@ -10,9 +10,12 @@
 //! opens and logins are saved for the site, the browser offers to fill them. Nothing is ever
 //! filled without a click.
 //!
-//! Passwords are encrypted with Windows' own protection (DPAPI, tied to this Windows account)
-//! before they touch the disk. The file is `%APPDATA%\Pteron\passwords.json`. Passwords are
-//! never synced and never put in problem reports.
+//! Passwords are encrypted before they touch the disk. On Windows with Windows' own protection
+//! (DPAPI, tied to this Windows account), in `%APPDATA%\Pteron\passwords.json`. On Linux with
+//! AES-256-GCM, under a random key kept in the system keyring (GNOME Keyring / KWallet, through
+//! `secret-tool`), or, where there is no keyring, in a key file only your account can read
+//! (`~/.config/Pteron/passwords.key`). Passwords are never synced and never put in problem
+//! reports.
 
 use crate::locks::LockExt;
 use std::path::PathBuf;
@@ -272,18 +275,191 @@ fn dpapi(protect: bool, input_b64: &str) -> Result<String, String> {
     }
 }
 
-#[cfg(not(windows))]
-fn dpapi(_protect: bool, _input_b64: &str) -> Result<String, String> {
-    Err("Saved passwords only work on Windows for now.".into())
-}
-
+#[cfg(windows)]
 fn protect(plain: &str) -> Result<String, String> {
     dpapi(true, &crate::util::b64_encode(plain.as_bytes()))
 }
 
+#[cfg(windows)]
 fn unprotect(blob: &str) -> Result<String, String> {
     let bytes = crate::util::b64_decode(&dpapi(false, blob)?).ok_or("Unreadable password.")?;
     String::from_utf8(bytes).map_err(|_| "Unreadable password.".to_string())
+}
+
+// ---------------------------------------------------------------- Linux protection
+
+#[cfg(not(windows))]
+fn protect(plain: &str) -> Result<String, String> {
+    // A new key is made only while no password is locked with one, so a keyring that is
+    // locked or away for a moment never leads to a second key (and lost passwords).
+    let create = !with_vault(|v| v.logins.iter().any(|l| l.pw.starts_with(SEALED)));
+    seal(&keystore::key(create)?, plain.as_bytes())
+}
+
+#[cfg(not(windows))]
+fn unprotect(blob: &str) -> Result<String, String> {
+    let bytes = open_sealed(&keystore::key(false)?, blob)?;
+    String::from_utf8(bytes).map_err(|_| "Unreadable password.".to_string())
+}
+
+/// How a password locked with AES-256-GCM starts in the file.
+const SEALED: &str = "g1:";
+const SEAL_LABEL: &[u8] = b"Pteron-passwords-v1";
+
+/// Encrypt with AES-256-GCM: `g1:` and base64 of a random 12-byte nonce, the text and the tag.
+#[cfg_attr(windows, allow(dead_code))]
+fn seal(key: &[u8; 32], plain: &[u8]) -> Result<String, String> {
+    use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+    use ring::rand::SecureRandom;
+    let sealer = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, key).map_err(|_| "Bad key.".to_string())?);
+    let mut nonce = [0u8; 12];
+    ring::rand::SystemRandom::new().fill(&mut nonce).map_err(|_| "No random numbers.".to_string())?;
+    let mut data = plain.to_vec();
+    sealer
+        .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(SEAL_LABEL), &mut data)
+        .map_err(|_| "Could not lock the password.".to_string())?;
+    let mut out = nonce.to_vec();
+    out.extend(data);
+    Ok(format!("{SEALED}{}", crate::util::b64_encode(&out)))
+}
+
+/// The other way round; fails if the key is wrong or the text was changed.
+#[cfg_attr(windows, allow(dead_code))]
+fn open_sealed(key: &[u8; 32], blob: &str) -> Result<Vec<u8>, String> {
+    use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+    let unreadable = || "This password was saved on another computer or with another key, and cannot be opened.".to_string();
+    let data = blob.strip_prefix(SEALED).and_then(crate::util::b64_decode).ok_or_else(unreadable)?;
+    if data.len() < 12 + 16 {
+        return Err(unreadable());
+    }
+    let (nonce, rest) = data.split_at(12);
+    let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| unreadable())?;
+    let opener = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, key).map_err(|_| unreadable())?);
+    let mut rest = rest.to_vec();
+    let plain = opener.open_in_place(nonce, Aad::from(SEAL_LABEL), &mut rest).map_err(|_| unreadable())?;
+    Ok(plain.to_vec())
+}
+
+/// The key that locks saved passwords on Linux: in the system keyring through `secret-tool`
+/// (from libsecret), or in a file only this account can read when there is no keyring.
+#[cfg(not(windows))]
+mod keystore {
+    use std::io::{Read, Write};
+    use std::path::PathBuf;
+    use std::process::{Command, Stdio};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use crate::locks::LockExt;
+
+    static KEY: Mutex<Option<[u8; 32]>> = Mutex::new(None);
+    const ATTRIBUTES: [&str; 4] = ["application", "pteron", "purpose", "saved-passwords"];
+
+    fn decode(text: &str) -> Option<[u8; 32]> {
+        crate::util::b64_decode(text.trim())?.try_into().ok()
+    }
+
+    /// Run `secret-tool` with `input` on its standard input; its output, if it worked. Gives up
+    /// after a minute (the keyring may ask you to unlock it first).
+    fn secret_tool(args: &[&str], input: Option<&str>) -> Option<String> {
+        let mut child = Command::new("secret-tool")
+            .args(args)
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            let _ = stdin.write_all(input.as_bytes());
+        }
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let mut out = String::new();
+                    child.stdout.take()?.read_to_string(&mut out).ok()?;
+                    return status.success().then_some(out);
+                },
+                Ok(None) if started.elapsed() < Duration::from_secs(60) => std::thread::sleep(Duration::from_millis(50)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                },
+            }
+        }
+    }
+
+    fn from_keyring() -> Option<[u8; 32]> {
+        let mut args = vec!["lookup"];
+        args.extend(ATTRIBUTES);
+        decode(&secret_tool(&args, None)?)
+    }
+
+    fn into_keyring(key: &[u8; 32]) -> bool {
+        let mut args = vec!["store", "--label=Pteron saved passwords"];
+        args.extend(ATTRIBUTES);
+        secret_tool(&args, Some(&crate::util::b64_encode(key))).is_some() && from_keyring() == Some(*key)
+    }
+
+    fn key_file() -> Option<PathBuf> {
+        ::dirs::config_dir().map(|dir| dir.join(crate::pteron::APP_NAME).join("passwords.key"))
+    }
+
+    fn from_file() -> Option<[u8; 32]> {
+        decode(&std::fs::read_to_string(key_file()?).ok()?)
+    }
+
+    /// A new key file that only this account can read or write.
+    fn into_file(key: &[u8; 32]) -> bool {
+        let Some(path) = key_file() else { return false };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options
+            .open(&path)
+            .and_then(|mut file| file.write_all(crate::util::b64_encode(key).as_bytes()))
+            .is_ok()
+    }
+
+    /// The key (asked for once per run). With `create`, a new key is made when there is none.
+    pub(super) fn key(create: bool) -> Result<[u8; 32], String> {
+        let mut cached = KEY.lock_ok();
+        if let Some(key) = *cached {
+            return Ok(key);
+        }
+        let found = from_keyring().or_else(from_file);
+        let key = match found {
+            Some(key) => key,
+            None if create => {
+                use ring::rand::SecureRandom;
+                let mut key = [0u8; 32];
+                ring::rand::SystemRandom::new().fill(&mut key).map_err(|_| "No random numbers.".to_string())?;
+                if !into_keyring(&key) && !into_file(&key) {
+                    return Err("Pteron could not keep a key for your saved passwords (no keyring, and the settings folder is not writable).".into());
+                }
+                key
+            },
+            None => {
+                return Err("The key for your saved passwords was not found. If your system keyring is locked, unlock it and try again.".into());
+            },
+        };
+        *cached = Some(key);
+        Ok(key)
+    }
+
+    /// Where the key is kept, for the settings page.
+    pub(super) fn place() -> &'static str {
+        if key_file().is_some_and(|path| path.exists()) {
+            "a key file only your account can read"
+        } else {
+            "your system keyring"
+        }
+    }
 }
 
 // ---------------------------------------------------------------- page messages
@@ -567,9 +743,21 @@ pub(crate) fn set_asks_windows(on: bool) {
     save_vault_now();
 }
 
-/// Saved passwords need Windows' own protection (DPAPI) for now, so elsewhere nothing is offered.
+/// Saved passwords work on Windows and Linux.
 pub(crate) fn enabled() -> bool {
-    cfg!(windows) && with_vault(|v| v.enabled)
+    supported() && with_vault(|v| v.enabled)
+}
+
+pub(crate) fn supported() -> bool {
+    cfg!(any(windows, target_os = "linux"))
+}
+
+/// Where the key that locks saved passwords is kept, said for the settings page.
+pub(crate) fn protection() -> &'static str {
+    #[cfg(windows)]
+    return "your Windows account";
+    #[cfg(not(windows))]
+    return keystore::place();
 }
 
 pub(crate) fn set_enabled(on: bool) {
@@ -615,6 +803,21 @@ mod tests {
 
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn sealed_passwords_open_only_with_their_key() {
+        let key = [7u8; 32];
+        let blob = seal(&key, "hunter2 \u{e9}".as_bytes()).unwrap();
+        assert!(blob.starts_with(SEALED) && !blob.contains("hunter2"));
+        assert_eq!(open_sealed(&key, &blob).unwrap(), "hunter2 \u{e9}".as_bytes());
+        assert_ne!(seal(&key, b"same").unwrap(), seal(&key, b"same").unwrap(), "a new nonce every time");
+        assert!(open_sealed(&[8u8; 32], &blob).is_err(), "wrong key");
+        let mut bytes = crate::util::b64_decode(&blob[3..]).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        assert!(open_sealed(&key, &format!("{SEALED}{}", crate::util::b64_encode(&bytes))).is_err(), "changed text");
+        assert!(open_sealed(&key, "g1:AAAA").is_err());
     }
 
     #[test]

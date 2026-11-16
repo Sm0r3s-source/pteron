@@ -948,8 +948,34 @@ fn video_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                 .checkbox(&mut settings.youtube_player, "Browse and play YouTube in Pteron's own pages")
                 .changed();
             changed |= ui
-                .checkbox(&mut settings.fast_start, "Start long videos sooner (first two minutes at once, then the whole video)")
+                .checkbox(&mut settings.fast_start, "Start long videos sooner (first 30 seconds at once, then the whole video)")
                 .changed();
+        },
+    );
+    card(
+        ui,
+        "SponsorBlock",
+        Some(
+            "Skips sponsor messages, self-promotion and \"like and subscribe\" reminders that other \
+             viewers have marked, and shows them on the seek bar. Pteron asks sponsor.ajay.app \
+             with only the first characters of a scrambled video number, so the service cannot \
+             tell which video you watch.",
+        ),
+        "sponsorblock sponsor skip segments ads youtube plume",
+        |ui| {
+            changed |= ui.checkbox(&mut settings.sponsorblock, "Skip sponsor segments").changed();
+        },
+    );
+    card(
+        ui,
+        "Lyrics",
+        Some(
+            "Plume Music shows the words of the song, highlighted in time with the music. The \
+             song's title, artist and length are sent to lrclib.net, a free lyrics library.",
+        ),
+        "lyrics karaoke words music lrclib synced",
+        |ui| {
+            changed |= ui.checkbox(&mut settings.lyrics, "Show synced lyrics in Plume Music").changed();
         },
     );
     card(
@@ -1038,20 +1064,23 @@ fn privacy_section(
         "Passwords",
         Some(
             "Pteron asks before saving a login, and fills it only when you click. Saved passwords \
-             are locked with your Windows account, kept only on this computer, and never synced.",
+             are encrypted, kept only on this computer, and never synced.",
         ),
         "passwords logins saved autofill sign in remember",
         |ui| {
-            if !cfg!(windows) {
-                ui.label("Saved passwords work on Windows only for now. On this system Pteron does not offer to save them.");
+            if !crate::passwords::supported() {
+                ui.label("Saved passwords work on Windows and Linux. On this system Pteron does not offer to save them.");
                 return;
             }
             let mut on = crate::passwords::enabled();
             if ui.checkbox(&mut on, "Offer to save passwords").changed() {
                 crate::passwords::set_enabled(on);
             }
+            if !crate::passwords::list().is_empty() {
+                ui.label(egui::RichText::new(format!("Locked with {}.", crate::passwords::protection())).weak());
+            }
             let mut ask = crate::passwords::asks_windows();
-            if ui
+            if cfg!(windows) && ui
                 .checkbox(&mut ask, "Ask for my Windows PIN, fingerprint or face before filling a password")
                 .on_hover_text("Uses Windows Hello. One confirmation counts for five minutes.")
                 .changed()

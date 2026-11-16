@@ -178,7 +178,7 @@ fn find_first<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 
 // ---------------------------------------------------------------- video
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct PlayerInfo {
     pub title: String,
     pub author: String,
@@ -190,6 +190,139 @@ pub(crate) struct PlayerInfo {
     /// `2024-05-17` style date, when YouTube says it.
     pub published: String,
     pub set: VideoSet,
+    /// Subtitles YouTube offers (closed captions and automatic ones).
+    pub captions: Vec<Caption>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Caption {
+    /// `https://www.youtube.com/api/timedtext?...` (WebVTT with `&fmt=vtt`).
+    pub url: String,
+    pub label: String,
+    pub lang: String,
+    /// Made by speech recognition.
+    pub auto: bool,
+}
+
+/// The subtitle tracks of a player answer (only YouTube's own addresses are kept).
+pub(crate) fn parse_captions(v: &Value) -> Vec<Caption> {
+    v.pointer("/captions/playerCaptionsTracklistRenderer/captionTracks")
+        .and_then(|t| t.as_array())
+        .map(|tracks| {
+            tracks
+                .iter()
+                .filter_map(|t| {
+                    let url = t.get("baseUrl")?.as_str()?;
+                    let parsed = url::Url::parse(url).ok()?;
+                    if parsed.scheme() != "https" ||
+                        !parsed.host_str().is_some_and(|h| h == "www.youtube.com" || h == "youtube.com") ||
+                        parsed.path() != "/api/timedtext"
+                    {
+                        return None;
+                    }
+                    let lang = t.get("languageCode").and_then(|l| l.as_str()).unwrap_or("").chars().take(20).collect::<String>();
+                    let auto = t.get("kind").and_then(|k| k.as_str()) == Some("asr");
+                    let mut label = t.get("name").map(text_of).unwrap_or_default();
+                    if label.is_empty() {
+                        label = lang.clone();
+                    }
+                    Some(Caption { url: url.to_string(), label: label.chars().take(60).collect(), lang, auto })
+                })
+                .take(40)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A small text file from YouTube or a helper service, over https only (subtitles, feeds,
+/// lyrics, sponsor segments). At most 4 MB.
+pub(crate) fn get_text(url: &str) -> Result<String, String> {
+    let out = curl_command()
+        .args(["-sS", "--fail", "-L", "--proto", "=https", "--max-time", "20", "--max-filesize", "4000000"])
+        .args(["-A", WEB_UA, "-H", "Accept-Language: en"])
+        .arg("--")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Could not start curl: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect());
+    }
+    String::from_utf8(out.stdout).map_err(|_| "The answer was not text.".to_string())
+}
+
+/// A small file over https (a cover picture): at most `max` bytes.
+pub(crate) fn get_bytes(url: &str, max: u64) -> Result<Vec<u8>, String> {
+    let out = curl_command()
+        .args(["-sS", "--fail", "-L", "--proto", "=https", "--max-time", "15", "--max-filesize", &max.to_string()])
+        .args(["-A", WEB_UA])
+        .arg("--")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("Could not start curl: {e}"))?;
+    if out.status.success() { Ok(out.stdout) } else { Err("download failed".into()) }
+}
+
+/// One video from a channel's public feed.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct FeedEntry {
+    pub id: String,
+    pub title: String,
+    pub channel: String,
+    /// `2026-11-15T10:00:00+00:00`
+    pub published: String,
+}
+
+/// Videos in a channel's Atom feed (`youtube.com/feeds/videos.xml?channel_id=...`).
+pub(crate) fn parse_feed(xml: &str) -> Vec<FeedEntry> {
+    fn tag<'a>(block: &'a str, name: &str) -> Option<&'a str> {
+        let start = block.find(&format!("<{name}>"))? + name.len() + 2;
+        let end = block[start..].find(&format!("</{name}>"))? + start;
+        Some(&block[start..end])
+    }
+    fn unescape(text: &str) -> String {
+        text.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&")
+    }
+    let channel = xml
+        .split("<entry>")
+        .next()
+        .and_then(|head| tag(head, "title"))
+        .map(unescape)
+        .unwrap_or_default();
+    xml.split("<entry>")
+        .skip(1)
+        .filter_map(|entry| {
+            let id = tag(entry, "yt:videoId")?.trim();
+            if !crate::youtube::valid_video_id(id) {
+                return None;
+            }
+            Some(FeedEntry {
+                id: id.to_string(),
+                title: unescape(tag(entry, "title").unwrap_or("")).chars().take(200).collect(),
+                channel: tag(entry, "name").map(unescape).unwrap_or_else(|| channel.clone()).chars().take(120).collect(),
+                published: tag(entry, "published").unwrap_or("").chars().take(30).collect(),
+            })
+        })
+        .take(15)
+        .collect()
+}
+
+/// The newest videos of a channel, from its public feed (no account, no InnerTube call).
+pub(crate) fn channel_feed(channel_id: &str) -> Result<Vec<FeedEntry>, String> {
+    if !(channel_id.starts_with("UC") && channel_id.len() == 24 && channel_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+        return Err("not a channel id".into());
+    }
+    get_text(&format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")).map(|xml| parse_feed(&xml))
 }
 
 fn range_end(format: &Value, key: &str) -> Option<u64> {
@@ -307,6 +440,7 @@ pub(crate) fn parse_player(v: &Value) -> Result<PlayerInfo, String> {
             audio,
             duration_ms,
         },
+        captions: parse_captions(v),
     })
 }
 
@@ -330,7 +464,31 @@ fn visitor() -> Option<String> {
     Some(id)
 }
 
+/// Answers of `player` kept for a while, so replaying a video, switching its quality or saving it
+/// does not ask YouTube again. (The stream addresses stay valid for hours.)
+static PLAYER_CACHE: std::sync::Mutex<Vec<(String, std::time::Instant, PlayerInfo)>> = std::sync::Mutex::new(Vec::new());
+const PLAYER_CACHE_SIZE: usize = 16;
+const PLAYER_CACHE_TIME: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 pub(crate) fn player(video_id: &str) -> Result<PlayerInfo, String> {
+    if let Ok(mut cache) = PLAYER_CACHE.lock() {
+        cache.retain(|(_, when, _)| when.elapsed() < PLAYER_CACHE_TIME);
+        if let Some((_, _, info)) = cache.iter().find(|(id, _, _)| id == video_id) {
+            return Ok(info.clone());
+        }
+    }
+    let info = player_uncached(video_id)?;
+    if let Ok(mut cache) = PLAYER_CACHE.lock() {
+        cache.retain(|(id, _, _)| id != video_id);
+        cache.push((video_id.to_string(), std::time::Instant::now(), info.clone()));
+        if cache.len() > PLAYER_CACHE_SIZE {
+            cache.remove(0);
+        }
+    }
+    Ok(info)
+}
+
+fn player_uncached(video_id: &str) -> Result<PlayerInfo, String> {
     // The first client is tried alone; the others only help with videos it refuses
     // (made-for-kids, some age or region limits) and are only used when it fails.
     let mut first_error = None;
@@ -659,6 +817,8 @@ pub(crate) fn comments(video_or_token: &str) -> Result<(Vec<Comment>, Option<Str
 
 #[derive(Debug, PartialEq, Default)]
 pub(crate) struct Channel {
+    /// `UC...` (for subscribing); empty when YouTube did not say.
+    pub id: String,
     pub title: String,
     pub handle: String,
     pub avatar: String,
@@ -753,7 +913,13 @@ pub(crate) fn parse_channel(answer: &Value, videos: Vec<VideoItem>) -> Channel {
                 .and_then(best_image)
         })
         .unwrap_or_default();
+    let id = text("externalId");
     Channel {
+        id: if id.starts_with("UC") && id.len() == 24 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            id
+        } else {
+            String::new()
+        },
         title: channel_title(answer).unwrap_or_else(|| "Channel".into()),
         handle,
         avatar,

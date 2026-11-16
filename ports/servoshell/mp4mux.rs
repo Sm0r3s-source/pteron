@@ -792,40 +792,25 @@ pub(crate) fn build_layout(video: &Init, vdata: &TrackData, audio: &Init, adata:
     let at = sample_tables(adata, false);
     let mscale = movie_scale(video)?;
 
-    // 3. the moov is built twice: the chunk offsets depend on how long the moov is, but not the
-    //    other way round (they have a fixed width)
-    let mut moov_len = 0usize;
-    let mut result: Option<(Vec<u8>, Vec<u64>)> = None; // (prefix, relative offsets)
-    for pass in 0..2 {
-        let prefix_len = if pass == 0 { 0 } else { ftyp().len() + moov_len + 16 } as u64;
-        let mut rel = 0u64;
-        let mut voff = Vec::new();
-        let mut aoff = Vec::new();
-        for p in &order {
-            match p.kind {
-                Kind::Video => voff.push(prefix_len + rel),
-                Kind::Audio => aoff.push(prefix_len + rel),
-            }
-            rel += p.chunk.len;
+    // 3. the moov is built once with offsets counted from the start of the media data, then the
+    //    chunk offset tables are shifted by the length of everything in front of it (their entries
+    //    have a fixed width, so the moov does not change length)
+    let mut rel = 0u64;
+    let mut voff = Vec::with_capacity(vt.chunk_count as usize);
+    let mut aoff = Vec::with_capacity(at.chunk_count as usize);
+    for p in &order {
+        match p.kind {
+            Kind::Video => voff.push(rel),
+            Kind::Audio => aoff.push(rel),
         }
-        let (vtrak, vdur) = build_trak(video, 1, &vt, &voff, wide, mscale, true)?;
-        let (atrak, adur) = build_trak(audio, 2, &at, &aoff, wide, mscale, false)?;
-        let (mvhd, _) = mvhd_for(video, vdur.max(adur))?;
-        let moov = boxed(b"moov", &[&mvhd, &vtrak, &atrak]);
-        moov_len = moov.len();
-        if pass == 1 {
-            let mut prefix = ftyp();
-            prefix.extend_from_slice(&moov);
-            // mdat with a 64-bit size, so the payload can be any length
-            prefix.extend_from_slice(&1u32.to_be_bytes());
-            prefix.extend_from_slice(b"mdat");
-            prefix.extend_from_slice(&(16 + payload).to_be_bytes());
-            let mut all = voff;
-            all.extend(aoff);
-            result = Some((prefix, all));
-        }
+        rel += p.chunk.len;
     }
-    let (prefix, _) = result.ok_or(MuxError("could not build the file".into()))?;
+    let (vtrak, vdur) = build_trak(video, 1, &vt, &voff, wide, mscale, true)?;
+    drop((voff, vt));
+    let (atrak, adur) = build_trak(audio, 2, &at, &aoff, wide, mscale, false)?;
+    drop((aoff, at));
+    let (mvhd, _) = mvhd_for(video, vdur.max(adur))?;
+    let prefix = prefix_for(boxed(b"moov", &[&mvhd, &vtrak, &atrak]), payload)?;
     let mut pieces = Vec::with_capacity(order.len());
     let mut out = prefix.len() as u64;
     for p in order {
@@ -837,12 +822,72 @@ pub(crate) fn build_layout(video: &Init, vdata: &TrackData, audio: &Init, adata:
         });
         out += p.chunk.len;
     }
-    let _ = (vt.chunk_count, at.chunk_count);
     Ok(Layout {
         prefix,
         pieces,
         total: out,
     })
+}
+
+/// `ftyp`, the `moov` and the `mdat` header in front of the media data. The chunk offsets in the
+/// `moov` were counted from the start of the media data; they are moved past this prefix here.
+fn prefix_for(mut moov: Vec<u8>, payload: u64) -> Res<Vec<u8>> {
+    let ftyp = ftyp();
+    let shift = (ftyp.len() + moov.len() + 16) as u64;
+    shift_chunk_offsets(&mut moov, shift)?;
+    let mut prefix = ftyp;
+    prefix.reserve(moov.len() + 16);
+    prefix.extend_from_slice(&moov);
+    // mdat with a 64-bit size, so the payload can be any length
+    prefix.extend_from_slice(&1u32.to_be_bytes());
+    prefix.extend_from_slice(b"mdat");
+    prefix.extend_from_slice(&(16 + payload).to_be_bytes());
+    Ok(prefix)
+}
+
+/// Add `shift` to every entry of the `stco`/`co64` tables inside `data` (a `moov`, walked down
+/// through `trak`, `mdia`, `minf` and `stbl`).
+fn shift_chunk_offsets(data: &mut [u8], shift: u64) -> Res<()> {
+    let mut at = 0usize;
+    while at + 8 <= data.len() {
+        let size32 = u32::from_be_bytes(data[at..at + 4].try_into().unwrap_or_default()) as usize;
+        let kind: [u8; 4] = data[at + 4..at + 8].try_into().unwrap_or_default();
+        let (header, size) = if size32 == 1 && at + 16 <= data.len() {
+            (16, u64::from_be_bytes(data[at + 8..at + 16].try_into().unwrap_or_default()) as usize)
+        } else {
+            (8, size32)
+        };
+        if size < header || at + size > data.len() {
+            return Err(MuxError("damaged box while placing the chunks".into()));
+        }
+        let body = &mut data[at + header..at + size];
+        match &kind {
+            b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" => shift_chunk_offsets(body, shift)?,
+            b"stco" | b"co64" => {
+                let width = if &kind == b"stco" { 4 } else { 8 };
+                if body.len() < 8 {
+                    return Err(MuxError("short chunk offset table".into()));
+                }
+                let count = u32::from_be_bytes(body[4..8].try_into().unwrap_or_default()) as usize;
+                if body.len() < 8 + count * width {
+                    return Err(MuxError("short chunk offset table".into()));
+                }
+                for entry in body[8..8 + count * width].chunks_exact_mut(width) {
+                    if width == 4 {
+                        let value = u32::from_be_bytes(entry.try_into().unwrap_or_default()) as u64 + shift;
+                        let value = u32::try_from(value).map_err(|_| MuxError("chunk offset too large".into()))?;
+                        entry.copy_from_slice(&value.to_be_bytes());
+                    } else {
+                        let value = u64::from_be_bytes(entry.try_into().unwrap_or_default()) + shift;
+                        entry.copy_from_slice(&value.to_be_bytes());
+                    }
+                }
+            },
+            _ => {},
+        }
+        at += size;
+    }
+    Ok(())
 }
 
 /// A file with only the audio track (for listening to music without downloading any video).
@@ -857,30 +902,16 @@ pub(crate) fn build_audio_layout(audio: &Init, adata: &TrackData) -> Res<Layout>
     let wide = payload > 0xF000_0000;
     let at = sample_tables(adata, false);
     let mscale = movie_scale(audio)?;
-    let mut moov_len = 0usize;
-    let mut prefix_out: Option<Vec<u8>> = None;
-    for pass in 0..2 {
-        let prefix_len = if pass == 0 { 0 } else { ftyp().len() + moov_len + 16 } as u64;
-        let mut rel = 0u64;
-        let mut aoff = Vec::with_capacity(order.len());
-        for p in &order {
-            aoff.push(prefix_len + rel);
-            rel += p.chunk.len;
-        }
-        let (atrak, adur) = build_trak(audio, 1, &at, &aoff, wide, mscale, false)?;
-        let (mvhd, _) = mvhd_for(audio, adur)?;
-        let moov = boxed(b"moov", &[&mvhd, &atrak]);
-        moov_len = moov.len();
-        if pass == 1 {
-            let mut prefix = ftyp();
-            prefix.extend_from_slice(&moov);
-            prefix.extend_from_slice(&1u32.to_be_bytes());
-            prefix.extend_from_slice(b"mdat");
-            prefix.extend_from_slice(&(16 + payload).to_be_bytes());
-            prefix_out = Some(prefix);
-        }
+    let mut rel = 0u64;
+    let mut aoff = Vec::with_capacity(order.len());
+    for p in &order {
+        aoff.push(rel);
+        rel += p.chunk.len;
     }
-    let prefix = prefix_out.ok_or(MuxError("could not build the file".into()))?;
+    let (atrak, adur) = build_trak(audio, 1, &at, &aoff, wide, mscale, false)?;
+    drop((aoff, at));
+    let (mvhd, _) = mvhd_for(audio, adur)?;
+    let prefix = prefix_for(boxed(b"moov", &[&mvhd, &atrak]), payload)?;
     let mut pieces = Vec::with_capacity(order.len());
     let mut out = prefix.len() as u64;
     for p in order {

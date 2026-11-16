@@ -201,6 +201,17 @@ fn download_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Pteron: where a picture of a page (from "Take screenshot") goes: a new PNG file in the
+/// Pictures folder (or Downloads), named after the page and the date.
+pub(crate) fn screenshot_path(title: &str) -> PathBuf {
+    let dir = dirs::picture_dir().unwrap_or_else(download_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let secs = crate::crashlog::unix_secs(std::time::SystemTime::now());
+    let (y, m, d) = crate::crashlog::civil_from_days(crate::crashlog::day_number(secs));
+    let title = sanitize_file_name(&title.chars().take(60).collect::<String>());
+    unique_path(&dir, &format!("{title} {y}-{m:02}-{d:02}.png"))
+}
+
 /// `dir/name`, or `dir/name (1).ext`, `dir/name (2).ext`, ... if it already exists.
 /// Mark the file as coming from the internet (the `Zone.Identifier` stream), so Windows
 /// SmartScreen checks programs before they run. Does nothing on other systems.
@@ -255,8 +266,13 @@ pub(crate) fn media_file_name(title: &str, audio: bool) -> String {
 
 /// Called when the user pressed a download button on a Plume page. The address must be one of
 /// the local video helper's.
-pub(crate) fn begin_media(url: &str, title: &str, artist: &str, audio: bool) {
-    let convert = audio.then(|| crate::mp3::Tags { title: title.to_string(), artist: artist.to_string() });
+pub(crate) fn begin_media(url: &str, title: &str, artist: &str, audio: bool, video_id: &str) {
+    let convert = audio.then(|| crate::mp3::Tags {
+        title: title.to_string(),
+        artist: artist.to_string(),
+        video_id: if crate::youtube::valid_video_id(video_id) { video_id.to_string() } else { String::new() },
+        cover: Vec::new(),
+    });
     begin_named(url, media_file_name(title, audio), convert);
 }
 
@@ -592,8 +608,15 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
     } else {
         None
     };
-    if let Some((tags, name)) = convert {
-        // A song saved as MP3: the sound that just arrived is converted.
+    if let Some((mut tags, name)) = convert {
+        // A song saved as MP3: the sound that just arrived is converted, with the video's
+        // picture as its cover.
+        if !tags.video_id.is_empty() && tags.cover.is_empty() {
+            tags.cover = crate::innertube::get_bytes(&format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", tags.video_id), 200_000)
+                .ok()
+                .filter(|b| b.starts_with(&[0xFF, 0xD8]))
+                .unwrap_or_default();
+        }
         let final_path = unique_path(&download_dir(), &name);
         let mut temp = final_path.clone().into_os_string();
         temp.push(".convert");
@@ -787,7 +810,7 @@ mod tests {
         begin_named(
             &format!("http://127.0.0.1:{port}/song.m4a"),
             "Test Song.mp3".into(),
-            Some(crate::mp3::Tags { title: "Test Song".into(), artist: "Me".into() }),
+            Some(crate::mp3::Tags { title: "Test Song".into(), artist: "Me".into(), ..Default::default() }),
         );
         let started = Instant::now();
         let mut finished = false;

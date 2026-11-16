@@ -277,6 +277,137 @@ pub(crate) fn clear_history() {
     });
 }
 
+/// Forget one page of the history.
+pub(crate) fn remove_from_history(url: &str) {
+    with(|data| {
+        let before = data.history.len();
+        data.history.retain(|entry| !same_page(&entry.url, url));
+        if data.history.len() != before {
+            save_history(data);
+        }
+    });
+}
+
+/// History pages whose address or title contains every word of `query`, the newest first.
+pub(crate) fn search_history(query: &str, max: usize) -> Vec<Entry> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut found: Vec<Entry> = with(|data| {
+        data.history
+            .iter()
+            .filter(|entry| {
+                let text = format!("{} {}", entry.url, entry.title).to_lowercase();
+                words.iter().all(|word| text.contains(word.as_str()))
+            })
+            .cloned()
+            .collect()
+    })
+    .unwrap_or_default();
+    found.sort_by(|a, b| b.last.cmp(&a.last));
+    found.truncate(max);
+    found
+}
+
+fn history_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(crate::util::random_token)
+}
+
+fn encode(text: &str) -> String {
+    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
+}
+
+/// `servo:history`: the pages you visited, newest first, grouped by day, with a search box.
+/// `?q=` searches; `?del=<address>&t=<code>` forgets one page; `?clear=ask` / `?clear=yes&t=<code>`
+/// clears everything. (Web pages cannot open this page: see `protocols/servo.rs`.)
+pub(crate) fn history_html(page: &url::Url) -> String {
+    let pairs: std::collections::HashMap<String, String> = page.query_pairs().into_owned().collect();
+    let query = pairs.get("q").map(|q| q.trim().to_string()).unwrap_or_default();
+    let allowed = pairs.get("t").map(String::as_str) == Some(history_token());
+    let token = history_token();
+    let back = format!("servo:history?q={}", encode(&query));
+    if allowed {
+        if let Some(url) = pairs.get("del") {
+            remove_from_history(url);
+            return format!("<!doctype html><meta charset=utf-8><script>location.replace({:?})</script>", back);
+        }
+        if pairs.get("clear").map(String::as_str) == Some("yes") {
+            clear_history();
+            return "<!doctype html><meta charset=utf-8><script>location.replace('servo:history')</script>".into();
+        }
+    }
+    let style = crate::pteron::PAGE_STYLE_PUBLIC;
+    if pairs.get("clear").map(String::as_str) == Some("ask") {
+        return format!(
+            "<!doctype html><title>History</title>{style}<h1>Clear all history?</h1>\
+<p class=sub>Every page you visited is forgotten. Bookmarks, passwords and open tabs stay.</p>\
+<p><a class=btn href=\"servo:history?clear=yes&amp;t={token}\">Clear all history</a> &nbsp; <a href=\"servo:history\">Cancel</a></p>"
+        );
+    }
+    let entries = search_history(&query, 500);
+    let now = crate::crashlog::unix_secs(std::time::SystemTime::now());
+    let today = crate::crashlog::day_number(now);
+    let mut list = String::new();
+    let mut day = None;
+    for entry in &entries {
+        let this_day = crate::crashlog::day_number(entry.last as i64);
+        if day != Some(this_day) {
+            if day.is_some() {
+                list.push_str("</div>");
+            }
+            day = Some(this_day);
+            let name = match today - this_day {
+                0 => "Today".to_string(),
+                1 => "Yesterday".to_string(),
+                _ => {
+                    let (y, m, d) = crate::crashlog::civil_from_days(this_day);
+                    format!("{y}-{m:02}-{d:02}")
+                },
+            };
+            list.push_str(&format!("<h2>{name}</h2><div class=card>"));
+        }
+        let title = if entry.title.trim().is_empty() { entry.url.as_str() } else { entry.title.as_str() };
+        let host = url::Url::parse(&entry.url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+        let visits = if entry.visits > 1 { format!(" &middot; {} visits", entry.visits) } else { String::new() };
+        list.push_str(&format!(
+            "<div class=h><a class=t href=\"{}\" title=\"{}\">{}</a><span class=sub> {}{}</span>\
+<a class=x href=\"servo:history?del={}&amp;t={token}&amp;q={}\" title=\"Remove from history\">&times;</a></div>",
+            escape_html(&entry.url),
+            escape_html(&entry.url),
+            escape_html(&title.chars().take(120).collect::<String>()),
+            escape_html(&host),
+            visits,
+            encode(&entry.url),
+            encode(&query),
+        ));
+    }
+    if day.is_some() {
+        list.push_str("</div>");
+    }
+    if entries.is_empty() {
+        list = if !query.is_empty() {
+            format!("<p class=sub>No pages match <b>{}</b>.</p>", escape_html(&query))
+        } else if crate::pteron::settings().history_enabled {
+            "<p class=sub>No history yet. Pages you visit show up here.</p>".into()
+        } else {
+            "<p class=sub>History is turned off (Settings &rarr; Privacy &amp; data).</p>".into()
+        };
+    }
+    format!(
+        "<!doctype html><title>History</title>{style}\
+<style>.h{{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(128,128,128,.15)}}\
+.h:last-child{{border-bottom:0}}.h .t{{flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}}\
+.h .sub{{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}}\
+.h .x{{text-decoration:none;font-size:18px;opacity:.5;padding:0 6px}}.h .x:hover{{opacity:1}}\
+form{{display:flex;gap:8px;margin:12px 0}}form input{{flex:1;padding:8px 10px;font-size:15px}}</style>\
+<h1>History</h1><form action=\"servo:history\"><input name=q value=\"{}\" placeholder=\"Search history\" autofocus>\
+<button class=btn>Search</button></form>\
+<p class=sub>{}{} &middot; <a href=\"servo:history?clear=ask\">Clear all history</a></p>{list}",
+        escape_html(&query),
+        if query.is_empty() { "Newest first" } else { "Matching pages" },
+        if entries.len() == 500 { " (the first 500)" } else { "" },
+    )
+}
+
 pub(crate) fn bookmarks() -> Vec<Bookmark> {
     with(|data| data.bookmarks.clone()).unwrap_or_default()
 }
@@ -743,4 +874,23 @@ mod tests {
         assert_eq!(list[1].folder, "News");
         assert_eq!(list[2].folder, "");
     }
+    #[test]
+    fn history_page_searches_and_needs_the_code() {
+        with(|data| {
+            data.history.push(Entry { url: "https://history-test.example/page".into(), title: "Unusual zebra title".into(), visits: 2, last: 1_700_000_000 })
+        });
+        let page = history_html(&url::Url::parse("servo:history?q=zebra").unwrap());
+        assert!(page.contains("history-test.example"));
+        let none = history_html(&url::Url::parse("servo:history?q=nothing-matches-this").unwrap());
+        assert!(none.contains("No pages match"));
+        let bad = format!("servo:history?del={}&t=wrong", encode("https://history-test.example/page"));
+        history_html(&url::Url::parse(&bad).unwrap());
+        assert!(!search_history("zebra", 10).is_empty(), "a wrong code removes nothing");
+        let good = format!("servo:history?del={}&t={}", encode("https://history-test.example/page"), history_token());
+        history_html(&url::Url::parse(&good).unwrap());
+        assert!(search_history("zebra", 10).is_empty());
+        let xss = history_html(&url::Url::parse("servo:history?q=%3Cscript%3E").unwrap());
+        assert!(!xss.contains("<script>") && xss.contains("&lt;script&gt;"));
+    }
+
 }

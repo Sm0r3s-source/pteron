@@ -8,6 +8,8 @@ mod streamproxy;
 mod mp4mux;
 #[path = "../../ports/servoshell/crashlog.rs"]
 mod crashlog;
+#[path = "../../ports/servoshell/plume.rs"]
+mod plume;
 #[path = "../../ports/servoshell/youtube.rs"]
 mod youtube;
 #[path = "../../ports/servoshell/downloads.rs"]

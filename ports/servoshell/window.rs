@@ -189,6 +189,8 @@ pub(crate) struct ServoShellWindow {
     out_of_sight: Cell<bool>,
     /// Pteron: tabs that are currently playing audio/video. These never sleep.
     media_playing: RefCell<HashSet<WebViewId>>,
+    /// Pteron: tabs the user muted.
+    muted: RefCell<HashSet<WebViewId>>,
     /// Pteron: pinned tabs.
     pinned: RefCell<HashSet<WebViewId>>,
     /// Pteron: tabs the user asked to keep awake (they never go to sleep).
@@ -227,6 +229,7 @@ impl ServoShellWindow {
             pending_gc: Default::default(),
             out_of_sight: Default::default(),
             media_playing: Default::default(),
+            muted: Default::default(),
             pinned: Default::default(),
             awake: Default::default(),
             split_ratio: Cell::new(0.5),
@@ -536,6 +539,7 @@ impl ServoShellWindow {
         self.scroll.borrow_mut().remove(&webview_id);
         self.restore_scroll.borrow_mut().remove(&webview_id);
         self.media_playing.borrow_mut().remove(&webview_id);
+        self.muted.borrow_mut().remove(&webview_id);
         self.pinned.borrow_mut().remove(&webview_id);
         self.awake.borrow_mut().remove(&webview_id);
         self.platform_window
@@ -597,6 +601,49 @@ impl ServoShellWindow {
             } else {
                 playing.remove(&webview_id);
             }
+        }
+    }
+
+    /// Pteron: is this tab playing sound (audio or video) right now?
+    pub(crate) fn is_audible(&self, id: WebViewId) -> bool {
+        self.media_playing.borrow().contains(&id)
+    }
+
+    /// Pteron: did the user mute this tab?
+    pub(crate) fn is_muted(&self, id: WebViewId) -> bool {
+        self.muted.borrow().contains(&id)
+    }
+
+    /// Pteron: mute a tab, or unmute it. Servo has no switch for a page's sound, so the page's
+    /// audio and video elements are muted (and new ones as they start playing).
+    pub(crate) fn toggle_muted(&self, id: WebViewId) {
+        let muted = {
+            let mut set = self.muted.borrow_mut();
+            if set.remove(&id) {
+                false
+            } else {
+                set.insert(id);
+                true
+            }
+        };
+        if let Some(webview) = self.webview_by_id(id) {
+            webview.evaluate_javascript(mute_script(muted), |_| {});
+        }
+        self.set_needs_update();
+    }
+
+    /// Pteron: a muted tab loaded a new page: mute that one too.
+    pub(crate) fn reapply_mute(&self, webview: &WebView) {
+        if self.is_muted(webview.id()) {
+            webview.evaluate_javascript(mute_script(true), |_| {});
+        }
+    }
+
+    /// Pteron: stop loading the page in the active tab (like the browser's stop button).
+    pub(crate) fn stop_loading(&self) {
+        if let Some(webview) = self.active_webview() {
+            webview.evaluate_javascript("window.stop()", |_| {});
+            self.set_needs_update();
         }
     }
 
@@ -1154,4 +1201,24 @@ pub(crate) fn site_of(webview: &WebView) -> String {
             None => url.scheme().to_string(),
         })
         .unwrap_or_else(|| "This page".to_string())
+}
+
+/// Pteron: mute (or unmute) every audio and video element of a page and its same-site frames,
+/// and keep muting the ones that start playing later (also those not in the page, `new Audio()`).
+/// Elements the page had muted itself stay muted after unmuting.
+fn mute_script(muted: bool) -> String {
+    format!(
+        r#"(function(m){{try{{
+window.__pteronMuted=m;
+function each(d){{try{{d.querySelectorAll('video,audio').forEach(function(e){{
+if(m){{if(!e.__pteronMute){{e.__pteronMute={{was:e.muted}};}}e.muted=true;}}
+else if(e.__pteronMute){{e.muted=!!e.__pteronMute.was;delete e.__pteronMute;}}
+}});}}catch(x){{}}}}
+each(document);for(var i=0;i<frames.length;i++){{try{{frames[i].__pteronMuted=m;each(frames[i].document);}}catch(x){{}}}}
+if(!window.__pteronMuteHook&&window.HTMLMediaElement){{window.__pteronMuteHook=1;
+var play=HTMLMediaElement.prototype.play;
+HTMLMediaElement.prototype.play=function(){{if(window.__pteronMuted){{if(!this.__pteronMute)this.__pteronMute={{was:this.muted}};this.muted=true;}}return play.apply(this,arguments);}};
+document.addEventListener('play',function(ev){{var e=ev.target;if(window.__pteronMuted&&e&&'muted' in e){{if(!e.__pteronMute)e.__pteronMute={{was:e.muted}};e.muted=true;}}}},true);}}
+}}catch(x){{}}}})({muted});"#
+    )
 }

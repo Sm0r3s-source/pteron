@@ -45,7 +45,6 @@ use euclid::{Length, Point2D, Rect, Scale, Size2D};
     target_os = "macos"
 ))]
 use log::info;
-use log::warn;
 use servo::{
     DeviceIndependentPixel, DevicePixel, Image, LoadStatus, OffscreenRenderingContext, PixelFormat,
     RenderingContext, WebView, WebViewId,
@@ -786,6 +785,8 @@ impl Gui {
                                 .filter(|_| look.tab_icons),
                             awake: window.is_awake(id),
                             split: window.split().is_some_and(|(left, right)| left == id || right == id),
+                            audible: window.is_audible(id),
+                            muted: window.is_muted(id),
                         })
                         .collect(),
                     sleeping: window
@@ -1012,6 +1013,38 @@ impl Gui {
                                 window.toggle_awake(*id);
                             }
                         },
+                        sidebar::Action::ToggleMute(index) => {
+                            if let Some(id) = ids.get(index) {
+                                window.toggle_muted(*id);
+                            }
+                        },
+                        sidebar::Action::Stop => window.stop_loading(),
+                        sidebar::Action::Screenshot(index) => {
+                            if let Some(webview) = ids.get(index).and_then(|id| window.webview_by_id(*id)) {
+                                // Only a page on screen is drawn, so show the tab first.
+                                window.activate_webview(webview.id());
+                                let title = webview.page_title().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Page".into());
+                                webview.take_screenshot(None, move |result| match result {
+                                    Ok(image) => {
+                                        let _ = std::thread::Builder::new().name("pteron-screenshot".into()).spawn(move || {
+                                            let path = crate::downloads::screenshot_path(&title);
+                                            crate::downloads::set_notice(
+                                                match image::DynamicImage::ImageRgba8(image).save_with_format(&path, image::ImageFormat::Png) {
+                                                    Ok(()) => format!("Screenshot saved: {}", path.display()),
+                                                    Err(error) => format!("Could not save the screenshot: {error}"),
+                                                },
+                                            );
+                                        });
+                                    },
+                                    Err(error) => crate::downloads::set_notice(format!("Could not take a screenshot ({error:?}).")),
+                                });
+                            }
+                        },
+                        sidebar::Action::History => {
+                            if let Ok(url) = Url::parse("servo:history") {
+                                window.queue_user_interface_command(UserInterfaceCommand::NewTabWithUrl(url));
+                            }
+                        },
                         sidebar::Action::Window(sidebar::WindowAction::Drag) => {
                             if winit_window.drag_window().is_ok() {
                                 *mouse_taken = true;
@@ -1094,7 +1127,7 @@ impl Gui {
                                         info
                                     });
                                     if stop_button.clicked() {
-                                        warn!("Do not support stop yet.");
+                                        window.stop_loading();
                                     }
                                 },
                                 LoadStatus::Complete => {
@@ -1482,6 +1515,8 @@ impl Gui {
             };
             let active_id = window.active_webview().map(|webview| webview.id());
             let mut active_pane = available_rect;
+            // Every page on screen (both of a split view) with the part of the window it has.
+            let mut shown_panes: Vec<(WebViewId, egui::Rect)> = Vec::new();
             *split_divider = None;
             if let Some((left, right)) = window.shown_split() {
                 let x = (available_rect.min.x + available_rect.width() * window.split_ratio()).round();
@@ -1497,6 +1532,7 @@ impl Gui {
                     if Some(id) == active_id {
                         active_pane = rect;
                     }
+                    shown_panes.push((id, rect));
                 }
                 window.set_panes(Some(panes.map(|(id, rect)| {
                     (id, (rect.min.x - available_rect.min.x) * ppp, (rect.max.x - available_rect.min.x) * ppp)
@@ -1516,6 +1552,7 @@ impl Gui {
                 window.set_panes(None);
                 if let Some(webview) = window.active_webview() {
                     webview.set_rect(place(available_rect));
+                    shown_panes.push((webview.id(), available_rect));
                 }
             }
             // (Lists and menus of the active page measure from its own corner.)
@@ -1526,8 +1563,8 @@ impl Gui {
             {
                 let active = window.active_webview();
                 let active_url = active.as_ref().and_then(|webview| webview.url());
-                // Menus, lists and tips open over the page. On Windows the system's view keeps
-                // showing the page with a hole where they are; elsewhere it steps aside meanwhile.
+                // Menus, lists and tips open over the page. On Windows and Linux the system's view
+                // keeps showing the page with a hole where they are; elsewhere it steps aside meanwhile.
                 let popups: Vec<egui::Rect> = ctx.memory(|memory| {
                     let areas = memory.areas();
                     memory
@@ -1538,7 +1575,7 @@ impl Gui {
                         .collect()
                 });
                 let free = !settings_page.open &&
-                    (cfg!(windows) || popups.is_empty()) &&
+                    (cfg!(any(windows, target_os = "linux")) || popups.is_empty()) &&
                     !sidebar::location_focused(ctx);
                 let live: Vec<WebViewId> = window.webview_ids();
                 let current = active.as_ref().zip(active_url.as_ref()).map(|(webview, url)| (webview.id(), url));
@@ -1554,17 +1591,28 @@ impl Gui {
                     ctx.request_repaint_after(std::time::Duration::from_millis(if sidebar.pinned { 500 } else { 100 }));
                 }
                 // A sidebar floating over the page leaves the rest of it to the view. (In split
-                // view the compatibility tab has its half while it is the active tab.)
-                let mut area = active_pane;
-                if sidebar.visible && !sidebar.pinned {
-                    if sidebar.right {
-                        area.max.x = area.max.x.min(ctx.content_rect().max.x - sidebar.width);
-                    } else {
-                        area.min.x = area.min.x.max(sidebar.width);
-                    }
-                }
+                // view each compatibility tab has its own half, active or not.)
+                let panes: Vec<(WebViewId, url::Url, egui::Rect)> = if free {
+                    shown_panes
+                        .iter()
+                        .filter_map(|(id, rect)| {
+                            let mut area = *rect;
+                            if sidebar.visible && !sidebar.pinned {
+                                if sidebar.right {
+                                    area.max.x = area.max.x.min(ctx.content_rect().max.x - sidebar.width);
+                                } else {
+                                    area.min.x = area.min.x.max(sidebar.width);
+                                }
+                            }
+                            let url = window.webview_by_id(*id)?.url()?;
+                            Some((*id, url, area))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let corner = f32::from(ctx.global_style().visuals.menu_corner_radius.nw);
-                compat_host.sync(winit_window, &live, current, free.then_some(area), (&popups, corner), ctx.pixels_per_point(), ctx.wants_keyboard_input());
+                compat_host.sync(winit_window, &live, current, &panes, (&popups, corner), ctx.pixels_per_point(), ctx.wants_keyboard_input());
                 crate::compat_host::note_alive(compat_host.alive());
                 // The system engine passed a browser check: Servo carries on with the pass.
                 if let Some(handoff) = compat_host.take_handoff() {

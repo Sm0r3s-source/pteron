@@ -275,7 +275,7 @@ impl Host {
         window: &winit::window::Window,
         live: &[WebViewId],
         active: Option<(WebViewId, &url::Url)>,
-        area: Option<egui::Rect>,
+        panes: &[(WebViewId, url::Url, egui::Rect)],
         popups: (&[egui::Rect], f32),
         points_to_pixels: f32,
         typing: bool,
@@ -285,15 +285,15 @@ impl Host {
         if self.trim_until.is_some_and(|until| Instant::now() >= until) {
             self.trim_until = None;
         }
-        let shown = match (active, area) {
-            (Some((id, placeholder)), Some(area)) => crate::compat_view::target(placeholder)
-                .map(|page| (id, page, area))
-                // (Servo is still loading the page it was handed: the placeholder is not shown again.)
-                .filter(|(id, ..)| !self.released.contains_key(id)),
-            _ => None,
-        };
-        let shown_id = shown.as_ref().map(|(id, ..)| *id);
-        if shown.is_none() {
+        // Every compatibility tab on screen: one, or both pages of a split view.
+        // (Servo is still loading the page it was handed: the placeholder is not shown again.)
+        let shown: Vec<(WebViewId, url::Url, egui::Rect)> = panes
+            .iter()
+            .filter(|(id, ..)| !self.released.contains_key(id))
+            .filter_map(|(id, placeholder, area)| crate::compat_view::target(placeholder).map(|page| (*id, page, *area)))
+            .collect();
+        let shown_id = shown.first().map(|(id, ..)| *id);
+        if shown.is_empty() {
             // Nothing over the page: the last report from a view no longer means anything.
             POINTER.store(0, Relaxed);
         }
@@ -324,7 +324,7 @@ impl Host {
             }
         }
         self.was_shown = shown_id.is_some();
-        if let Some((id, page, area)) = shown {
+        for (id, page, area) in shown.iter().map(|(id, page, area)| (*id, page.clone(), *area)) {
             if self.entries.get(&id).is_some_and(|e| e.target != page.as_str()) {
                 self.entries.remove(&id);
             }
@@ -346,14 +346,15 @@ impl Host {
             self.cut_holes(id, area, popups, points_to_pixels);
         }
         let keep = Duration::from_secs(crate::memsaver::tab_sleep_secs(KEEP_HIDDEN_SECS));
-        for (_, entry) in self.entries.iter_mut().filter(|(id, _)| Some(**id) != shown_id) {
+        for (_, entry) in self.entries.iter_mut().filter(|(id, _)| !shown.iter().any(|(shown, ..)| shown == *id)) {
             entry.hide(keep);
         }
         self.clean_up_engine();
     }
 
-    /// Pteron's menus are drawn in its own window, under the system's view: on Windows the view
-    /// gets holes where they are, so they show and the page stays on screen around them.
+    /// Pteron's menus are drawn in its own window, under the system's view: the view gets holes
+    /// where they are, so they show and the page stays on screen around them (Windows here,
+    /// Linux below).
     #[cfg(all(pteron_wry, windows))]
     fn cut_holes(&mut self, id: WebViewId, area: egui::Rect, (popups, corner): (&[egui::Rect], f32), scale: f32) {
         use windows_sys::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, RGN_DIFF, SetWindowRgn};
@@ -394,7 +395,53 @@ impl Host {
         entry.holes = holes;
     }
 
-    #[cfg(not(all(pteron_wry, windows)))]
+    /// The same on Linux: the X11 window that holds the WebKitGTK view gets a shape (through
+    /// GDK) with the menus left out, their round corners in steps of one pixel.
+    #[cfg(all(pteron_wry, target_os = "linux"))]
+    fn cut_holes(&mut self, id: WebViewId, area: egui::Rect, (popups, corner): (&[egui::Rect], f32), scale: f32) {
+        use gtk::cairo::{RectangleInt, Region};
+        use gtk::prelude::*;
+        use wry::WebViewExtUnix;
+        let Some(entry) = self.entries.get_mut(&id) else { return };
+        let Some(view) = &entry.view else { return };
+        let widget = view.webview();
+        // (GDK counts in its own units: device pixels divided by its scale.)
+        let factor = widget.scale_factor().max(1) as f32;
+        let unit = |value: f32| (value * scale / factor).round() as i32;
+        let holes: Vec<[i32; 5]> = popups
+            .iter()
+            .map(|r| {
+                let (left, top) = (unit(r.min.x - area.min.x), unit(r.min.y - area.min.y));
+                [left, top, unit(r.max.x - area.min.x), unit(r.max.y - area.min.y), unit(corner)]
+            })
+            .collect();
+        if holes == entry.holes {
+            return;
+        }
+        let Some(gdk_window) = widget.toplevel().and_then(|top| top.window()) else { return };
+        if holes.is_empty() {
+            gdk_window.shape_combine_region(None, 0, 0);
+        } else {
+            let region = Region::create_rectangle(&RectangleInt::new(0, 0, unit(area.width()), unit(area.height())));
+            for [left, top, right, bottom, radius] in &holes {
+                let (width, height) = (right - left, bottom - top);
+                let radius = (*radius).clamp(0, width.min(height) / 2);
+                let _ = region.subtract_rectangle(&RectangleInt::new(*left, top + radius, width, height - 2 * radius));
+                for row in 0..radius {
+                    // How far in the rounded corner starts on this row of pixels.
+                    let dy = radius as f32 - row as f32 - 0.5;
+                    let inset = (radius as f32 - (radius as f32 * radius as f32 - dy * dy).max(0.0).sqrt()).round() as i32;
+                    let band = |y: i32| RectangleInt::new(left + inset, y, width - 2 * inset, 1);
+                    let _ = region.subtract_rectangle(&band(top + row));
+                    let _ = region.subtract_rectangle(&band(bottom - 1 - row));
+                }
+            }
+            gdk_window.shape_combine_region(Some(&region), 0, 0);
+        }
+        entry.holes = holes;
+    }
+
+    #[cfg(not(all(pteron_wry, any(windows, target_os = "linux"))))]
     fn cut_holes(&mut self, _: WebViewId, _: egui::Rect, _: (&[egui::Rect], f32), _: f32) {}
 
     #[cfg(pteron_wry)]

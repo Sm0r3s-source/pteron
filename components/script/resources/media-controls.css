@@ -122,6 +122,55 @@ button:hover {
   opacity: 0;
 }
 
+/* Pteron: chapter lines and skipped parts on the seek bar, and the time under the mouse. */
+.marks {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.mark-chapter {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background-color: rgba(10, 10, 12, 0.85);
+}
+
+.mark-part {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background-color: #4caf6a;
+  opacity: 0.9;
+}
+
+.seek {
+  position: relative;
+}
+
+.seektip {
+  position: absolute;
+  top: 100%;
+  margin-top: 6px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background-color: rgba(10, 10, 12, 0.88);
+  color: #ece8df;
+  pointer-events: none;
+}
+
+.seektip.hidden {
+  display: none;
+}
+
 .slider:hover .track {
   height: 5px;
 }

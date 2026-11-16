@@ -31,10 +31,12 @@ use crate::mp4mux::{Init, Kind, Layout, MuxError, build_layout, load_track, pars
 const MAX_SETS: usize = 24;
 /// The "quality" number of the audio-only file of a track (Pteron Music).
 pub(crate) const AUDIO_ONLY: u32 = 0;
-const MAX_SESSIONS: usize = 8;
+/// Ready file layouts kept (each holds the sample tables of one quality of one video). The
+/// least recently used one goes first.
+const MAX_SESSIONS: usize = 4;
 /// The first part of a video that is made ready at once (seconds), so playback can start
 /// while the whole file layout is still being worked out.
-pub(crate) const PARTIAL_SECS: f64 = 120.0;
+pub(crate) const PARTIAL_SECS: f64 = 30.0;
 const MAX_CONNECTIONS: usize = 12;
 /// Same identity yt-dlp presents for this client.
 pub(crate) const UPSTREAM_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
@@ -256,6 +258,11 @@ impl Proxy {
     }
 
     /// Address the Music page sends its commands to (`?x=search:...`).
+    /// Address the Plume pages send their small commands to (`?x=next:<id>` and so on).
+    pub(crate) fn plume_url(&self) -> String {
+        format!("http://127.0.0.1:{}/p/{}", self.port, self.state.lock_ok().suggest_token)
+    }
+
     pub(crate) fn music_url(&self) -> String {
         format!("http://127.0.0.1:{}/u/{}", self.port, self.state.lock_ok().suggest_token)
     }
@@ -379,9 +386,14 @@ fn session_for(
     itag: u32,
     partial: bool,
 ) -> Result<Arc<Session>, String> {
+    // A session in use moves to the end of the list, so the one dropped is the least recently used.
     let find = || {
-        let guard = state.lock_ok();
-        guard.sessions.iter().find(|((t, i, p), _)| t == token && *i == itag && *p == partial).map(|(_, s)| s.clone())
+        let mut guard = state.lock_ok();
+        let at = guard.sessions.iter().position(|((t, i, p), _)| t == token && *i == itag && *p == partial)?;
+        let entry = guard.sessions.remove(at);
+        let session = entry.1.clone();
+        guard.sessions.push(entry);
+        Some(session)
     };
     if let Some(s) = find() {
         return Ok(s);
@@ -535,6 +547,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<State>>, net: &Net
             'q' => ("application/json", crate::youtube::search_more_json(&value)),
             'c' => ("application/json", crate::youtube::comments_json(&value)),
             'u' => ("application/json", crate::music::command(&value)),
+            'p' => crate::plume::command(&value),
             _ => ("application/json", crate::youtube::more_json(&value)),
         };
         let head_text = format!(
@@ -642,6 +655,7 @@ fn helper_request(path: &str, token: &str) -> Option<(char, String)> {
         "/q/" => ('q', "c"),
         "/c/" => ('c', "c"),
         "/u/" => ('u', "x"),
+        "/p/" => ('p', "x"),
         _ => return None,
     };
     let (given, query) = path[3..].split_once('?')?;

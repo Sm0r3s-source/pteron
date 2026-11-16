@@ -11,6 +11,7 @@
 //! - servo:newtab-edit (Pteron: add or remove a new tab shortcut)
 //! - servo:welcome (Pteron)
 //! - servo:known-issues (Pteron)
+//! - servo:history (Pteron: browsing history; never opened by web pages)
 //! - servo:preferences
 
 use std::future::Future;
@@ -65,6 +66,7 @@ impl ProtocolHandler for ServoProtocolHandler {
             "welcome" => html_response(request, crate::pteron::welcome_html()),
             "compat" => html_response(request, crate::compat_view::placeholder_html(url.as_url())),
             "known-issues" => html_response(request, crate::pteron::known_issues_html()),
+            "history" => html_response(request, crate::library::history_html(url.as_url())),
             "http-warning" => html_response(request, crate::secure::warning_html(url.as_url())),
             "http-continue" => html_response(request, crate::secure::continue_html(url.as_url())),
             "danger-continue" => html_response(request, crate::danger::continue_html(url.as_url())),

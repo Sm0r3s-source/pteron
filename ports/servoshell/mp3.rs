@@ -25,6 +25,10 @@ use symphonia::core::probe::Hint;
 pub(crate) struct Tags {
     pub title: String,
     pub artist: String,
+    /// The YouTube video the song came from (its picture becomes the cover).
+    pub video_id: String,
+    /// JPEG cover picture, if one could be fetched.
+    pub cover: Vec<u8>,
 }
 
 fn ascii_tag(text: &str) -> Vec<u8> {
@@ -42,8 +46,12 @@ fn make_encoder(channels: u8, rate: u32, tags: &Tags) -> Result<mp3lame_encoder:
     builder.set_brate(if channels == 1 { Bitrate::Kbps128 } else { Bitrate::Kbps192 }).map_err(fail)?;
     builder.set_quality(Quality::Good).map_err(fail)?;
     let (title, artist) = (ascii_tag(&tags.title), ascii_tag(&tags.artist));
-    if !title.is_empty() || !artist.is_empty() {
-        let _ = builder.set_id3_tag(Id3Tag { title: &title, artist: &artist, album: b"", album_art: b"", year: b"", comment: b"" });
+    if !title.is_empty() || !artist.is_empty() || !tags.cover.is_empty() {
+        // The cover is left out if the encoder does not take it (too big, or not a picture).
+        let with_cover = builder.set_id3_tag(Id3Tag { title: &title, artist: &artist, album: b"", album_art: &tags.cover, year: b"", comment: b"" });
+        if with_cover.is_err() {
+            let _ = builder.set_id3_tag(Id3Tag { title: &title, artist: &artist, album: b"", album_art: b"", year: b"", comment: b"" });
+        }
     }
     builder.build().map_err(fail)
 }
@@ -185,7 +193,14 @@ mod tests {
         }
         let cancel = AtomicBool::new(false);
         let mut last = 0.0;
-        let tags = Tags { title: "Test song".into(), artist: "Me".into() };
+        // A small JPEG cover, made by ffmpeg as well.
+        let cover_file = dir.join("c.jpg");
+        let _ = std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=orange:s=64x36", "-frames:v", "1"])
+            .arg(&cover_file)
+            .status();
+        let cover = std::fs::read(&cover_file).unwrap_or_default();
+        let tags = Tags { title: "Test song".into(), artist: "Me".into(), video_id: String::new(), cover: cover.clone() };
         m4a_to_mp3(&src, &dst, &tags, &cancel, &mut |p| last = p).expect("converts");
         assert!(last > 0.99);
         let size = std::fs::metadata(&dst).unwrap().len();
@@ -194,6 +209,9 @@ mod tests {
         assert!(range.contains(&size), "size {size}");
         let bytes = std::fs::read(&dst).unwrap();
         assert!(bytes.starts_with(b"ID3"), "has a tag");
+        if !cover.is_empty() {
+            assert!(bytes.windows(4).any(|w| w == b"APIC"), "has the cover picture");
+        }
         // Where ffprobe is installed, an independent program confirms it is a real MP3.
         if let Ok(out) = std::process::Command::new("ffprobe")
             .args(["-v", "error", "-show_entries", "stream=codec_name,channels,sample_rate:format=duration", "-of", "default=nw=1"])

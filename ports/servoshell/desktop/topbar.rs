@@ -143,7 +143,7 @@ fn tab(
     sleeping: bool,
     pinned: bool,
     marks: Option<&sidebar::TabRow>,
-) -> (egui::Response, bool) {
+) -> (egui::Response, bool, bool) {
     let response = ui.interact(rect, id, if sleeping { Sense::click() } else { Sense::click_and_drag() });
     // (Over the tab or its close button: the button sits on top of the tab and takes the hover.)
     let hovered = ui.rect_contains_pointer(rect);
@@ -196,7 +196,11 @@ fn tab(
                 painter.text(center, Align2::CENTER_CENTER, letter.to_uppercase(), FontId::proportional(14.0), color);
             },
         }
-        return (response, false);
+        // A pinned tab that plays sound shows a small speaker in its corner (the menu mutes it).
+        if let Some(row) = marks.filter(|row| row.audible || row.muted) {
+            sidebar::speaker_glyph(&painter, pos2(shape.max.x - 6.0, shape.min.y + 7.0), row.muted, c.text);
+        }
+        return (response, false, false);
     }
     let inner = shape.shrink2(vec2(10.0, 0.0));
     let mut text_x = inner.min.x;
@@ -214,7 +218,14 @@ fn tab(
     } else {
         tinted(c.text, c.strip, 0.25)
     };
+    let mut muting = false;
     if let Some(row) = marks {
+        if row.audible || row.muted {
+            muting = ui
+                .interact(sidebar::audio_rect(pos2(text_right, center_y)), id.with("audio"), Sense::click())
+                .on_hover_text(if row.muted { "Unmute tab" } else { "Mute tab" })
+                .clicked();
+        }
         text_right -= sidebar::tab_marks(&painter, pos2(text_right, center_y), row, color);
     }
     let text = if sleeping { format!("zZ  {label}") } else { label.to_string() };
@@ -230,7 +241,7 @@ fn tab(
         painter.text(close_rect.center(), Align2::CENTER_CENTER, "×", FontId::proportional(15.0), color);
         closed = close.clicked();
     }
-    (response, closed)
+    (response, closed, muting)
 }
 
 const UV: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -264,7 +275,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                     }
                     let rect = Rect::from_min_size(pos2(x, full.min.y), vec2(w, height));
                     x += w;
-                    let (response, closed) =
+                    let (response, closed, muting) =
                         tab(ui, style, c, look, rect, Id::new(("pteron_top_tab", index)), &t.label, t.favicon, t.active, false, t.pinned, Some(t));
                     if response.drag_started() {
                         ui.memory_mut(|memory| memory.data.insert_temp(Id::new(DRAG_KEY), index));
@@ -278,7 +289,9 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                             actions.push(Action::MoveTab { from, to: index });
                         }
                     }
-                    if closed || response.middle_clicked() {
+                    if muting {
+                        actions.push(Action::ToggleMute(index));
+                    } else if closed || response.middle_clicked() {
                         actions.push(if t.pinned { Action::TogglePin(index) } else { Action::Close(index) });
                     } else if response.clicked() && !t.active {
                         actions.push(Action::Activate(index));
@@ -292,7 +305,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
                     }
                     let rect = Rect::from_min_size(pos2(x, full.min.y), vec2(w, height));
                     x += w;
-                    let (response, _) =
+                    let (response, _, _) =
                         tab(ui, style, c, look, rect, Id::new(("pteron_top_sleeping", index)), &t.label, None, false, true, t.pinned, None);
                     if response.middle_clicked() {
                         actions.push(Action::CloseSleeping(index));
@@ -426,6 +439,7 @@ fn main_menu(ui: &mut egui::Ui, model: &Model, look: &Look, actions: &mut Vec<Ac
     item(ui, "New window", Action::NewWindow, actions);
     ui.separator();
     ui.menu_button("Bookmarks", |ui| bookmarks_menu(ui, model, actions));
+    item(ui, "History  (Ctrl+H)", Action::History, actions);
     if !crate::downloads::snapshot().is_empty() {
         ui.menu_button("Downloads", |ui| {
             ui.set_width(280.0);

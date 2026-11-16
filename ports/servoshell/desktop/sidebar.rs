@@ -50,6 +50,10 @@ pub(crate) struct TabRow {
     pub awake: bool,
     /// One of the two tabs of the split view.
     pub split: bool,
+    /// Playing sound (audio or video) right now.
+    pub audible: bool,
+    /// Muted by the user.
+    pub muted: bool,
 }
 
 /// One bookmark, as shown in the list.
@@ -147,6 +151,14 @@ pub(crate) enum Action {
     /// Close every tab except this one, or every tab listed after it (pinned tabs stay).
     CloseOthers(usize),
     CloseAfter(usize),
+    /// Mute or unmute the tab's sound.
+    ToggleMute(usize),
+    /// Stop loading the page in the active tab.
+    Stop,
+    /// Save a picture of the tab's page.
+    Screenshot(usize),
+    /// Open the browsing history.
+    History,
     Window(WindowAction),
 }
 
@@ -679,6 +691,13 @@ fn framed(
                         {
                             actions.push(Action::NewWindow);
                         }
+                        if ui
+                            .add_sized([26.0, 26.0], Button::new(RichText::new("🕘").size(15.0)).frame(false))
+                            .on_hover_text("History (Ctrl+H)")
+                            .clicked()
+                        {
+                            actions.push(Action::History);
+                        }
                         if cog_button(ui).on_hover_text("Settings").clicked() {
                             actions.push(Action::ToggleSettings);
                         }
@@ -805,7 +824,9 @@ pub(crate) fn nav_buttons(
     }
     if look.shows("reload") {
         if model.loading {
-            ui.add_enabled(false, icon_button("…"));
+            if ui.add(icon_button("✕")).on_hover_text("Stop loading").clicked() {
+                actions.push(Action::Stop);
+            }
         } else if ui.add(icon_button("↻")).on_hover_text("Reload").clicked() {
             *location_dirty = false;
             actions.push(Action::Reload);
@@ -1084,6 +1105,10 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, model: &Model, actions
         vec2(24.0, row_height() - 4.0),
     );
     let close = ui.interact(close_rect, response.id.with("close"), Sense::click());
+    let audio_click = (tab.audible || tab.muted) &&
+        ui.interact(audio_rect(pos2(rect.max.x - 30.0, rect.center().y)), response.id.with("audio"), Sense::click())
+            .on_hover_text(if tab.muted { "Unmute tab" } else { "Mute tab" })
+            .clicked();
     let row_hovered = ui.rect_contains_pointer(rect);
 
     let visuals = ui.visuals();
@@ -1141,7 +1166,9 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, model: &Model, actions
         );
     }
 
-    if tab.pinned {
+    if audio_click {
+        actions.push(Action::ToggleMute(index));
+    } else if tab.pinned {
         if close.clicked() {
             actions.push(Action::TogglePin(index));
         } else if response.clicked() && !tab.active {
@@ -1161,6 +1188,10 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, model: &Model, actions
 pub(crate) fn tab_marks(painter: &egui::Painter, right: Pos2, tab: &TabRow, color: Color32) -> f32 {
     let stroke = Stroke::new(1.2_f32, color.gamma_multiply(0.75));
     let mut used = 0.0;
+    if tab.audible || tab.muted {
+        speaker_glyph(painter, audio_rect(right).center(), tab.muted, color);
+        used += 18.0;
+    }
     if tab.awake {
         let center = right - vec2(used + 7.0, 0.0);
         painter.circle_stroke(center, 4.5, stroke);
@@ -1176,6 +1207,36 @@ pub(crate) fn tab_marks(painter: &egui::Painter, right: Pos2, tab: &TabRow, colo
     used
 }
 
+/// Where the speaker of a tab that plays sound is (the rightmost mark): click it to mute.
+pub(crate) fn audio_rect(right: Pos2) -> Rect {
+    Rect::from_center_size(right - vec2(8.0, 0.0), vec2(18.0, 18.0))
+}
+
+/// A small speaker, with sound waves, or crossed out when muted.
+pub(crate) fn speaker_glyph(painter: &egui::Painter, center: Pos2, muted: bool, color: Color32) {
+    let stroke = Stroke::new(1.3_f32, color);
+    let c = center - vec2(3.0, 0.0);
+    painter.add(egui::Shape::convex_polygon(
+        vec![c + vec2(-4.0, -2.0), c + vec2(-1.5, -2.0), c + vec2(2.0, -5.0), c + vec2(2.0, 5.0), c + vec2(-1.5, 2.0), c + vec2(-4.0, 2.0)],
+        color,
+        Stroke::NONE,
+    ));
+    if muted {
+        painter.line_segment([c + vec2(4.5, -2.5), c + vec2(9.5, 2.5)], stroke);
+        painter.line_segment([c + vec2(4.5, 2.5), c + vec2(9.5, -2.5)], stroke);
+    } else {
+        for (radius, steps) in [(4.5_f32, 6), (8.0, 8)] {
+            let points: Vec<Pos2> = (0..=steps)
+                .map(|i| {
+                    let angle = -0.9 + 1.8 * i as f32 / steps as f32;
+                    c + vec2(1.5 + radius * angle.cos(), radius * angle.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(points, stroke));
+        }
+    }
+}
+
 /// The right-click menu of a live tab.
 pub(crate) fn tab_menu(ui: &mut egui::Ui, index: usize, model: &Model, actions: &mut Vec<Action>) {
     fn item(ui: &mut egui::Ui, text: &str, action: Action, actions: &mut Vec<Action>) {
@@ -1189,6 +1250,8 @@ pub(crate) fn tab_menu(ui: &mut egui::Ui, index: usize, model: &Model, actions: 
     };
     item(ui, "Reload", Action::ReloadTab(index), actions);
     item(ui, "Duplicate", Action::Duplicate(index), actions);
+    item(ui, if tab.muted { "Unmute tab" } else { "Mute tab" }, Action::ToggleMute(index), actions);
+    item(ui, "Take screenshot", Action::Screenshot(index), actions);
     ui.separator();
     item(ui, if tab.pinned { "Unpin tab" } else { "Pin tab" }, Action::TogglePin(index), actions);
     let mut awake = tab.awake;

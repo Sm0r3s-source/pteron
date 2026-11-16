@@ -52,7 +52,8 @@
           <span id="duration"> / #2</span>
         </span>
         <div class="slider seek">
-          <div class="track"><div class="fill" id="progress-fill"></div><div class="knob" id="progress-knob"></div></div>
+          <div class="track"><div class="fill" id="progress-fill"></div><div class="marks" id="progress-marks"></div><div class="knob" id="progress-knob"></div></div>
+          <div class="seektip hidden" id="progress-tip"></div>
           <input id="progress" type="range" value="0" min="0" max="100" step="0.1"></input>
         </div>
         <button id="volume-switch"></button>
@@ -97,6 +98,11 @@
 
       this.mutationObserver = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
+          // Pteron: chapters and skipped parts for the seek bar (`data-marks` on the video).
+          if (mutation.type === "attributes" && mutation.attributeName === "data-marks") {
+            this.drawMarks();
+            continue;
+          }
           // Here we handle the `controls` attribute removal.
           if (mutation.type === "attributes") {
             this.cleanup();
@@ -114,7 +120,7 @@
         }
       });
       this.mutationObserver.observe(this.media, {
-        attributeFilter: ["controls"]
+        attributeFilter: ["controls", "data-marks"]
       });
       if (this.media.parentNode) {
         this.mutationObserver.observe(this.media.parentNode, {
@@ -139,6 +145,8 @@
         "progress",
         "progress-fill",
         "progress-knob",
+        "progress-marks",
+        "progress-tip",
         "volume-switch",
         "volume-level",
         "volume-fill",
@@ -236,6 +244,10 @@
         this.scrubbing = false;
         this.render();
       }, () => { this.scrubbing = true; });
+      // Pteron: the time (and chapter) under the mouse on the seek bar.
+      this.elements.progress.addEventListener("mousemove", e => this.showSeekTip(e));
+      this.elements.progress.addEventListener("mouseleave", () => this.elements.progressTip.classList.add("hidden"));
+      this.drawMarks();
       this.installRangeDrag(this.elements.volumeLevel, percent => {
         this.elements.volumeLevel.value = percent;
         this.media.muted = false;
@@ -398,6 +410,68 @@
       this.syncSliders();
     }
 
+    // Pteron: chapter lines and skipped parts (SponsorBlock) on the seek bar. The page puts them
+    // on the video as `data-marks`: [{"s": start, "e": end (parts only), "t": title, "k": "ch" | "sb"}].
+    readMarks() {
+      try {
+        const marks = JSON.parse(this.media.getAttribute("data-marks") || "[]");
+        return Array.isArray(marks) ? marks.slice(0, 400) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    drawMarks() {
+      const box = this.elements.progressMarks;
+      if (!box) return;
+      box.textContent = "";
+      const length = this.length;
+      if (!Number.isFinite(length) || length <= 0) return;
+      for (const mark of this.readMarks()) {
+        const start = Number(mark.s);
+        if (!Number.isFinite(start) || start < 0 || start > length) continue;
+        const piece = document.createElement("div");
+        if (mark.k === "sb") {
+          const end = Math.min(length, Number(mark.e));
+          if (!(end > start)) continue;
+          piece.className = "mark-part";
+          piece.style.left = (start / length) * 100 + "%";
+          piece.style.width = ((end - start) / length) * 100 + "%";
+        } else if (start > 0) {
+          piece.className = "mark-chapter";
+          piece.style.left = (start / length) * 100 + "%";
+        } else {
+          continue;
+        }
+        box.appendChild(piece);
+      }
+    }
+
+    // Pteron: while pointing at the seek bar, show the time (and chapter) there.
+    showSeekTip(event) {
+      const tip = this.elements.progressTip;
+      const slider = this.elements.progress;
+      const length = this.length;
+      if (!tip || !slider || !Number.isFinite(length) || length <= 0) return;
+      const rect = slider.getBoundingClientRect();
+      if (!rect.width) return;
+      const fraction = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      const at = fraction * length;
+      let title = "";
+      for (const mark of this.readMarks()) {
+        if (mark.k === "sb" && at >= mark.s && at < mark.e) {
+          title = mark.t;
+          break;
+        }
+        if (mark.k !== "sb" && at >= mark.s) {
+          title = mark.t;
+        }
+      }
+      tip.textContent = formatTime(at * 1000) + (title ? "  " + title : "");
+      tip.style.left = fraction * 100 + "%";
+      tip.classList.remove("hidden");
+    }
+
     // Pteron: move the drawn fill and knob to match the (invisible) range inputs.
     syncSliders() {
       const pairs = [
@@ -482,8 +556,10 @@
           break;
         case "durationchange":
           this.render();
+          this.drawMarks();
           break;
         case "loadedmetadata":
+          this.drawMarks();
           break;
       }
     }

@@ -240,6 +240,24 @@ struct Store {
     later: Vec<VideoItem>,
     history: Vec<VideoItem>,
     positions: Vec<(String, u64)>,
+    /// Channels followed without an account: (`UC...` id, name).
+    subs: Vec<(String, String)>,
+    prefs: PlayerPrefs,
+}
+
+/// Player switches that are remembered.
+#[derive(Debug, Default, PartialEq, Clone)]
+pub(crate) struct PlayerPrefs {
+    pub autonext: bool,
+    pub looping: bool,
+    /// Preferred subtitle language (`en`), or empty for off.
+    pub captions: String,
+}
+
+const MAX_SUBS: usize = 500;
+
+pub(crate) fn valid_channel_id(id: &str) -> bool {
+    id.starts_with("UC") && id.len() == 24 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn clean(text: &str, max: usize) -> String {
@@ -304,6 +322,8 @@ impl Store {
             "later": self.later.iter().map(item_to_json).collect::<Vec<_>>(),
             "history": self.history.iter().map(item_to_json).collect::<Vec<_>>(),
             "positions": self.positions.iter().map(|(v, s)| serde_json::json!([v, s])).collect::<Vec<_>>(),
+            "subs": self.subs.iter().map(|(id, name)| serde_json::json!([id, name])).collect::<Vec<_>>(),
+            "prefs": {"autonext": self.prefs.autonext, "loop": self.prefs.looping, "captions": self.prefs.captions},
         })
         .to_string()
     }
@@ -332,11 +352,84 @@ impl Store {
                         .collect()
                 })
                 .unwrap_or_default(),
+            subs: v
+                .get("subs")
+                .and_then(|l| l.as_array())
+                .map(|l| {
+                    l.iter()
+                        .filter_map(|p| {
+                            let id = p.get(0)?.as_str()?;
+                            valid_channel_id(id).then(|| (id.to_string(), clean(p.get(1).and_then(|n| n.as_str()).unwrap_or(""), 120)))
+                        })
+                        .take(MAX_SUBS)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            prefs: PlayerPrefs {
+                autonext: v.pointer("/prefs/autonext").and_then(|b| b.as_bool()).unwrap_or(false),
+                looping: v.pointer("/prefs/loop").and_then(|b| b.as_bool()).unwrap_or(false),
+                captions: clean(v.pointer("/prefs/captions").and_then(|c| c.as_str()).unwrap_or(""), 20),
+            },
         }
     }
 }
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
+
+// ---- subscriptions and player switches (used by `plume.rs`)
+
+pub(crate) fn subscriptions() -> Vec<(String, String)> {
+    with_store(|s| s.subs.clone(), false)
+}
+
+pub(crate) fn is_subscribed(id: &str) -> bool {
+    with_store(|s| s.subs.iter().any(|(c, _)| c == id), false)
+}
+
+/// Follow or stop following a channel. Returns whether it is followed now.
+pub(crate) fn toggle_subscription(id: &str, name: &str) -> bool {
+    if !valid_channel_id(id) {
+        return false;
+    }
+    with_store(
+        |s| {
+            if let Some(i) = s.subs.iter().position(|(c, _)| c == id) {
+                s.subs.remove(i);
+                false
+            } else {
+                s.subs.insert(0, (id.to_string(), clean(name, 120)));
+                s.subs.truncate(MAX_SUBS);
+                true
+            }
+        },
+        true,
+    )
+}
+
+/// Adds channels (from an imported file). Returns how many were new.
+pub(crate) fn add_subscriptions(list: Vec<(String, String)>) -> usize {
+    with_store(
+        |s| {
+            let mut added = 0;
+            for (id, name) in list {
+                if valid_channel_id(&id) && !s.subs.iter().any(|(c, _)| *c == id) && s.subs.len() < MAX_SUBS {
+                    s.subs.push((id, clean(&name, 120)));
+                    added += 1;
+                }
+            }
+            added
+        },
+        true,
+    )
+}
+
+pub(crate) fn player_prefs() -> PlayerPrefs {
+    with_store(|s| s.prefs.clone(), false)
+}
+
+pub(crate) fn set_player_pref(change: impl FnOnce(&mut PlayerPrefs)) {
+    with_store(|s| change(&mut s.prefs), true)
+}
 
 fn store_file() -> Option<PathBuf> {
     base_dir().map(|dir| dir.join("plume.json"))
@@ -414,13 +507,13 @@ pub(crate) fn player_memory(value: &str) -> String {
         return String::new();
     }
     if let Some(rest) = value.strip_prefix("dl:") {
-        // dl:<video|audio>|<file address>|<title>|<channel>
-        let mut parts = rest.splitn(4, '|');
-        let (kind, url, title, channel) =
-            (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        // dl:<video|audio>|<file address>|<video id>|<title>|<channel>
+        let mut parts = rest.splitn(5, '|');
+        let mut next = || parts.next().unwrap_or("");
+        let (kind, url, video_id, title, channel) = (next(), next(), next(), next(), next());
         let ok = streamproxy::global().is_some_and(|p| p.is_media_url(url)) && matches!(kind, "video" | "audio");
         if ok {
-            crate::downloads::begin_media(url, title, &clean(channel, 120), kind == "audio");
+            crate::downloads::begin_media(url, title, &clean(channel, 120), kind == "audio", video_id);
         }
         return if ok { "1" } else { "0" }.into();
     }
@@ -520,6 +613,14 @@ video::selection{background:transparent}
 .qi{padding:7px 14px;border-radius:7px;cursor:pointer;white-space:nowrap;font-size:14px;color:var(--fg)}
 .qi:hover{background:rgba(214,170,72,.15)}
 .qi.on{color:var(--gold);font-weight:600}
+.qbtn.on{border-color:var(--gold);color:var(--gold)}
+.vwrap{position:relative}
+.cc{position:absolute;left:4%;right:4%;bottom:9%;text-align:center;pointer-events:none;line-height:1.35;z-index:5}
+.cc.fs{position:fixed;bottom:8%;z-index:2147483647}
+.cc span{display:inline-block;background:rgba(0,0,0,.78);color:#fff;padding:2px 10px;border-radius:5px;font-size:clamp(15px,2.3vw,26px);margin:2px 0;white-space:pre-wrap}
+.sbn{position:absolute;right:12px;bottom:18px;background:rgba(0,0,0,.82);color:#fff;border:1px solid var(--gold);border-radius:8px;padding:6px 10px;font-size:14px;z-index:6}
+.sbn button{margin-left:8px;font:inherit;font-size:13px;background:transparent;color:var(--gold);border:1px solid var(--gold);border-radius:6px;padding:2px 8px;cursor:pointer}
+.desc .text a.ts{color:var(--gold);font-variant-numeric:tabular-nums}
 select{font:inherit;font-size:14px;padding:5px 10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer}
 a.btn{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);text-decoration:none;cursor:pointer}
 a.gold{background:var(--gold);color:#1b1608;font-weight:600;border-color:var(--gold)}
@@ -814,7 +915,7 @@ fn filter_bar(query: &str, current: Filter) -> String {
     )
 }
 
-fn card(item: &VideoItem) -> String {
+pub(crate) fn card(item: &VideoItem) -> String {
     let title = if item.title.is_empty() { "(no title)" } else { item.title.as_str() };
     let mut meta = Vec::new();
     if !item.channel.is_empty() {
@@ -915,9 +1016,23 @@ fn channel_html(request: &Request, channel: &innertube::Channel) -> String {
     } else {
         format!("<div class=\"card\"><div class=\"text\" style=\"white-space:pre-wrap;word-break:break-word\">{}</div></div>", linkify(&channel.description))
     };
+    let plume = streamproxy::global().map(|p| p.plume_url()).unwrap_or_default();
+    let subscribe = if channel.id.is_empty() || plume.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<button type=\"button\" id=\"sub\" class=\"qbtn\" style=\"margin-top:8px\">Subscribe</button>\
+             <script>(function(){{var P='{plume}',b=document.getElementById('sub'),c='{}',n={};\
+             function x(q,cb){{var r=new XMLHttpRequest();r.open('GET',P+'?x='+encodeURIComponent(q));r.onload=function(){{cb(r.responseText);}};r.send();}}\
+             function paint(on){{b.textContent=on?'Subscribed ✓':'Subscribe';b.className='qbtn'+(on?' on':'');}}\
+             x('sub:has:'+c,function(t){{paint(t==='1');}});b.onclick=function(){{x('sub:toggle:'+c+'|'+n,function(t){{paint(t==='1');}});}};}})();</script>",
+            esc(&channel.id),
+            serde_json::to_string(&channel.title).unwrap_or_default().replace('<', "\\u003c"),
+        )
+    };
     let body = format!(
         "{banner}<div class=\"chead\">{avatar}<div><h1>{}</h1><div class=\"meta\">{}</div>\
-         <div class=\"cdesc\">{}</div></div></div>\
+         <div class=\"cdesc\">{}</div>{subscribe}</div></div>\
          <div class=\"tabs\"><button class=\"on\" id=\"tv\">Videos</button><button id=\"ta\">About</button></div>\
          <div id=\"pv\">{videos}{more}</div><div id=\"pa\" class=\"desc\" style=\"display:none\">{about}</div>\
          <script>(function(){{var tv=document.getElementById('tv'),ta=document.getElementById('ta'),pv=document.getElementById('pv'),pa=document.getElementById('pa');\
@@ -980,11 +1095,44 @@ fn saved_section(title: &str, kind: &str, items: &[VideoItem]) -> String {
     )
 }
 
+/// The home page's newest videos from followed channels (filled in once the page shows), and
+/// the import and export buttons.
+fn subscriptions_section(count: usize, plume: &str) -> String {
+    if plume.is_empty() {
+        return String::new();
+    }
+    let feed = if count == 0 {
+        "<p class=\"meta\" id=\"subl\">Follow channels with the Subscribe button on a video or channel page, \
+         or import your list from YouTube (Google Takeout's subscriptions.csv) or another app (OPML). \
+         No account is used: Pteron reads each channel's public feed.</p>"
+            .to_string()
+    } else {
+        format!("<p class=\"meta\" id=\"subl\">Loading the newest videos of {count} channel{}...</p><div class=\"grid\" id=\"g-subs\"></div>", if count == 1 { "" } else { "s" })
+    };
+    format!(
+        "<div class=\"sec\" id=\"s-subs\"><h2>Subscriptions</h2><span>\
+         <button type=\"button\" class=\"qbtn\" id=\"subi\">Import</button> \
+         <button type=\"button\" class=\"qbtn\" id=\"sube\"{}>Export</button></span></div>{feed}\
+         <script>(function(){{var P='{plume}';function x(q,cb){{var r=new XMLHttpRequest();r.open('GET',P+'?x='+encodeURIComponent(q));\
+         r.onload=function(){{var j=null;try{{j=JSON.parse(r.responseText);}}catch(e){{}}cb(j||{{}});}};r.onerror=function(){{cb({{}});}};r.send();}}\
+         var l=document.getElementById('subl'),g=document.getElementById('g-subs');\
+         if(g)x('feed',function(j){{if(j.html){{l.style.display='none';g.innerHTML=j.html;if(window.lazyCheck)window.lazyCheck();}}else{{l.textContent='No new videos could be loaded right now.';}}}});\
+         document.getElementById('subi').onclick=function(){{var b=this;b.disabled=true;b.textContent='Choose a file...';\
+         x('subs:import',function(j){{b.disabled=false;b.textContent='Import';\
+         if(j.error){{l.style.display='block';l.textContent=j.error;}}else if(!j.cancelled){{location.reload();}}}});}};\
+         document.getElementById('sube').onclick=function(){{var b=this;x('subs:export',function(j){{\
+         b.textContent=j.path?'Saved in Downloads ✓':'Could not save';setTimeout(function(){{b.textContent='Export';}},3000);}});}};}})();</script>",
+        if count == 0 { " style=\"display:none\"" } else { "" },
+    )
+}
+
 fn home_html() -> String {
-    let (later, history) = with_store(|s| (s.later.clone(), s.history.clone()), false);
+    let (later, history, subs) = with_store(|s| (s.later.clone(), s.history.clone(), s.subs.len()), false);
     let memory = streamproxy::global().map(|p| p.memory_url()).unwrap_or_default();
+    let plume = streamproxy::global().map(|p| p.plume_url()).unwrap_or_default();
     let sections = format!(
-        "{}{}",
+        "{}{}{}",
+        subscriptions_section(subs, &plume),
         saved_section("Watch later", "later", &later),
         saved_section("Recently watched", "history", &history)
     );
@@ -1040,6 +1188,86 @@ fn default_index(choices: &[Choice]) -> usize {
 /// The page's player logic. It starts the first couple of minutes of a long video at once, asks
 /// the helper (in the background) for the whole file, and swaps to it at the current position
 /// when it is ready. Changing quality works the same way.
+const PLAYER_EXTRA_JS: &str = r#"
+// ---- Pteron 68: up next, autoplay, loop, subscribe, chapters, SponsorBlock, subtitles
+var PL=PX.plume||'',prefs={autonext:false,loop:false,captions:''},firstNext=null,segs=[];
+function pl(x,cb){if(!PL){if(cb)cb('');return;}var r=new XMLHttpRequest();r.open('GET',PL+'?x='+encodeURIComponent(x));r.onload=function(){if(cb)cb(r.responseText);};r.onerror=function(){if(cb)cb('');};r.send();}
+(function(){var box=document.getElementById('nx'),l=document.getElementById('nxl');if(!box)return;
+  pl('next:'+VID.id,function(t){var r=null;try{r=JSON.parse(t);}catch(x){}
+    if(r&&r.html){l.remove();box.insertAdjacentHTML('beforeend',r.html);firstNext=r.first||null;if(window.lazyCheck)window.lazyCheck();}
+    else{l.textContent=r&&r.error?'Could not load the list: '+r.error:'Nothing to show.';}});})();
+var lp=document.getElementById('lp'),an=document.getElementById('an');
+function paintSw(){lp.textContent=prefs.loop?'Loop: on':'Loop';lp.className='qbtn'+(prefs.loop?' on':'');
+  an.textContent='Autoplay next: '+(prefs.autonext?'on':'off');an.className='qbtn'+(prefs.autonext?' on':'');try{cur().loop=prefs.loop;}catch(x){}}
+lp.onclick=function(){prefs.loop=!prefs.loop;pl('pref:loop:'+(prefs.loop?1:0));paintSw();};
+an.onclick=function(){prefs.autonext=!prefs.autonext;pl('pref:autonext:'+(prefs.autonext?1:0));paintSw();};
+var sub=document.getElementById('sub');
+if(sub&&PL){var cid=sub.getAttribute('data-c');
+  function subPaint(on){sub.textContent=on?'Subscribed ✓':'Subscribe';sub.className='qbtn'+(on?' on':'');}
+  pl('sub:has:'+cid,function(t){subPaint(t==='1');});
+  sub.onclick=function(){pl('sub:toggle:'+cid+'|'+sub.getAttribute('data-n'),function(t){subPaint(t==='1');});};}
+else if(sub){sub.style.display='none';}
+// Chapters: times in the description seek; chapters and skipped parts show on the seek bar.
+document.addEventListener('click',function(x){var a=x.target;if(!a||a.className!=='ts')return;x.preventDefault();
+  var v=cur();try{v.currentTime=parseInt(a.getAttribute('data-t'),10);var p=v.play();if(p&&p.catch)p.catch(function(){});}catch(e){}
+  window.scrollTo(0,0);});
+var SBNAME={sponsor:'Sponsor',selfpromo:'Self-promotion',interaction:'Subscribe reminder'};
+function marks(){var m=[];(PX.chapters||[]).forEach(function(c){m.push({s:c.t,t:c.title,k:'ch'});});
+  segs.forEach(function(g){m.push({s:g.s,e:g.e,t:SBNAME[g.c]||g.c,k:'sb'});});return JSON.stringify(m);}
+var sbn=document.getElementById('sbn'),sbT=null,selfSeek=false;
+function skipped(g){var v=cur();sbn.innerHTML='';var t=document.createElement('span');t.textContent='Skipped: '+(SBNAME[g.c]||g.c)+' ';
+  var u=document.createElement('button');u.type='button';u.textContent='Undo';u.onclick=function(){g.undone=true;selfSeek=true;try{v.currentTime=g.s;}catch(x){}sbn.style.display='none';};
+  sbn.appendChild(t);sbn.appendChild(u);sbn.style.display='block';clearTimeout(sbT);sbT=setTimeout(function(){sbn.style.display='none';},5000);}
+if(PX.sponsorblock)pl('sb:'+VID.id,function(t){try{segs=JSON.parse(t)||[];}catch(x){segs=[];}try{cur().setAttribute('data-marks',marks());}catch(x){}});
+// Subtitles, drawn over the video (also in full screen).
+var ccb=document.getElementById('ccb'),ccm=document.getElementById('ccm'),ccbox=document.getElementById('ccbox'),cues=[],ccOn=-1,ccCache={};
+function vttTime(t){var p=t.trim().split(':'),s=0;for(var i=0;i<p.length;i++)s=s*60+parseFloat(p[i].replace(',','.'));return s;}
+function parseVtt(text){var out=[];text.replace(/\r/g,'').split(/\n\n+/).forEach(function(block){var lines=block.split('\n');
+  for(var i=0;i<lines.length;i++){var m=lines[i].match(/([\d:.,]+)\s+-->\s+([\d:.,]+)/);
+    if(m){var txt=lines.slice(i+1).join('\n').replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&nbsp;/g,' ').trim();
+      if(txt)out.push({s:vttTime(m[1]),e:vttTime(m[2]),t:txt});break;}}});return out;}
+function ccDraw(){var v=cur();if(!ccbox)return;if(ccOn<0||!v){if(ccbox.__h){ccbox.__h='';ccbox.innerHTML='';}return;}
+  var t=v.currentTime,seen={},lines=[];
+  for(var i=0;i<cues.length;i++){var c=cues[i];if(t>=c.s&&t<c.e){c.t.split('\n').forEach(function(l){l=l.trim();if(l&&!seen[l]){seen[l]=1;lines.push(l);}});}}
+  lines=lines.slice(-2);var html=lines.map(function(l){return '<span>'+l.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</span>';}).join('<br>');
+  var fs=(v.getAttribute('style')||'').indexOf('position:fixed')>=0;var cls='cc'+(fs?' fs':'');if(ccbox.className!==cls)ccbox.className=cls;
+  if(ccbox.__h!==html){ccbox.__h=html;ccbox.innerHTML=html;}}
+setInterval(ccDraw,200);
+function ccPaint(){if(!ccb)return;ccb.textContent=(ccOn<0?'Off':PX.captions[ccOn].label)+' ▾';ccm.innerHTML='';
+  [-1].concat(PX.captions.map(function(_,i){return i;})).forEach(function(i){var d=document.createElement('div');d.className='qi'+(i===ccOn?' on':'');
+    d.textContent=i<0?'Off':PX.captions[i].label;d.onclick=function(x){x.stopPropagation();ccPick(i,true);};ccm.appendChild(d);});}
+function ccPick(i,save){ccm.style.display='none';ccOn=i;cues=[];ccDraw();ccPaint();
+  if(i<0){if(save)pl('pref:cc:');return;}
+  if(save)pl('pref:cc:'+PX.captions[i].lang);
+  if(ccCache[i]){cues=ccCache[i];return;}
+  ccb.textContent='Loading...';
+  pl('cc:'+VID.id+':'+i,function(t){if(ccOn!==i)return;if(t.indexOf('WEBVTT')<0){ccb.textContent='Could not load ▾';ccOn=-1;return;}cues=ccCache[i]=parseVtt(t);ccPaint();});}
+if(ccb){ccPaint();ccb.onclick=function(x){x.stopPropagation();qm.style.display='none';sm.style.display='none';ccm.style.display=ccm.style.display==='none'?'block':'none';};
+  document.addEventListener('click',function(){ccm.style.display='none';});}
+function ccAuto(){if(!ccb||!prefs.captions)return;var best=-1;
+  for(var i=0;i<PX.captions.length;i++){if(PX.captions[i].lang===prefs.captions){if(!PX.captions[i].auto){best=i;break;}if(best<0)best=i;}}
+  if(best>=0)ccPick(best,false);}
+pl('pref:get',function(t){try{var r=JSON.parse(t);prefs.autonext=!!r.autonext;prefs.loop=!!r.loop;prefs.captions=r.captions||'';}catch(x){}paintSw();ccAuto();});
+document.addEventListener('keydown',function(x){var tg=x.target&&x.target.tagName;if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA'||x.ctrlKey||x.altKey||x.metaKey)return;
+  if(x.key==='c'&&ccb){if(ccOn>=0)ccPick(-1,true);else{var w=0;for(var i=0;i<PX.captions.length;i++){if(PX.captions[i].lang===prefs.captions){w=i;break;}}ccPick(w,true);}}});
+function extras(v){
+  v.loop=prefs.loop;
+  if((PX.chapters&&PX.chapters.length)||segs.length)v.setAttribute('data-marks',marks());
+  v.addEventListener('seeked',function(){if(selfSeek){selfSeek=false;return;}segs.forEach(function(g){if(v.currentTime<g.s-1)g.undone=false;});});
+  // (Also checked four times a second, in case the engine sends few 'timeupdate' events.)
+  function sbCheck(){if(v.paused||!segs.length)return;
+    for(var i=0;i<segs.length;i++){var g=segs[i];
+      if(!g.undone&&v.currentTime>=g.s&&v.currentTime<g.e-0.5){selfSeek=true;try{v.currentTime=g.e;}catch(x){}skipped(g);break;}}}
+  setInterval(sbCheck,250);v.addEventListener('timeupdate',sbCheck);
+  v.addEventListener('ended',function(){
+    if(part&&!whole(opt()))return;
+    if(v.loop||!prefs.autonext||!firstNext)return;
+    say('Playing the next video...');
+    setTimeout(function(){location.href='https://www.youtube.com/watch?v='+firstNext;},1500);});
+}
+var hookX=hook;hook=function(v){hookX(v);extras(v);};
+"#;
+
 const PLAYER_JS: &str = r#"
 (function(){
 var FULL='@FULL@',MEM='@MEM@';
@@ -1169,7 +1397,7 @@ function dlButton(id,kind,url){
   var b=document.getElementById(id),old=b.textContent;
   b.onclick=function(){
     var u=url();if(!u)return;
-    mem('dl:'+kind+'|'+u+'|'+VID.title.replace(/\|/g,' ')+'|'+(VID.channel||'').replace(/\|/g,' '),function(r){
+    mem('dl:'+kind+'|'+u+'|'+VID.id+'|'+VID.title.replace(/\|/g,' ')+'|'+(VID.channel||'').replace(/\|/g,' '),function(r){
       b.textContent=r==='1'?'Started \u2713':'Could not start';
       setTimeout(function(){b.textContent=old;},2500);});};
 }
@@ -1201,6 +1429,7 @@ document.addEventListener('keydown',function(x){
   else if(x.key==='<'){stepRate(-1);}
   else if(/^[0-9]$/.test(x.key)&&v.duration){v.currentTime=v.duration*parseInt(x.key,10)/10;}
 });
+/*@EXTRA@*/
 hook(cur());
 if(MEM){var mx=new XMLHttpRequest();mx.open('GET',MEM+'?p=get');mx.onload=function(){
   var s=(mx.responseText||'').split(',');var vol=parseFloat(s[0]);
@@ -1210,7 +1439,7 @@ upgrade(++gen);
 })();
 "#;
 
-fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice], related: &[VideoItem]) -> String {
+fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice]) -> String {
     let title = if info.title.is_empty() { "YouTube video" } else { info.title.as_str() };
     let description: String = info.description.chars().take(2500).collect();
     let start = default_index(choices);
@@ -1227,7 +1456,15 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice], relat
                 esc(&choice.label)
             )
         })
-        .collect();
+        .collect::<String>();
+    // Sound only (the helper's quality 0): the picture stays on the poster.
+    let audio_url = choices[start].url.rsplit_once('/').map(|(base, _)| format!("{base}/0.mp4")).unwrap_or_default();
+    let audio_key = choices[start].key.rsplit_once('_').map(|(token, _)| format!("{token}_0")).unwrap_or_default();
+    let options = format!(
+        "{options}<option value=\"{0}\" data-p=\"{0}\" data-k=\"{1}\" data-audio=\"1\">Audio only</option>",
+        esc(&audio_url),
+        esc(&audio_key)
+    );
     let partial_attr = if choices[start].part != choices[start].url { " data-partial=\"1\"" } else { "" };
     let poster = Some(info.thumbnail.as_str())
         .filter(|url| url.starts_with("https://"))
@@ -1254,18 +1491,41 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice], relat
     if info.duration_secs > 0 {
         meta.push(format_duration(info.duration_secs));
     }
-    let next = if related.is_empty() {
+    // "Up next" is asked for once the player shows (it no longer holds the page back).
+    let next = "<aside class=\"next\" id=\"nx\"><h2>Up next</h2><p class=\"meta\" id=\"nxl\">Loading...</p></aside>";
+    let chapters = crate::plume::chapters(&description);
+    let subscribe = if info.channel_id.is_empty() {
         String::new()
     } else {
         format!(
-            "<aside class=\"next\"><h2>Up next</h2>{}</aside>",
-            related.iter().map(card).collect::<String>()
+            "<button type=\"button\" id=\"sub\" class=\"qbtn\" data-c=\"{}\" data-n=\"{}\">Subscribe</button>",
+            esc(&info.channel_id),
+            esc(&info.author)
         )
     };
+    let subtitles = if info.captions.is_empty() {
+        String::new()
+    } else {
+        "<span>Subtitles</span><button type=\"button\" id=\"ccb\" class=\"qbtn\">Off</button>\
+         <div id=\"ccm\" class=\"qmenu\" style=\"display:none\"></div>"
+            .to_string()
+    };
+    let extra_data = serde_json::json!({
+        "chapters": chapters.iter().map(|(t, title)| serde_json::json!({"t": t, "title": title})).collect::<Vec<_>>(),
+        "captions": info.captions.iter().map(|c| serde_json::json!({"label": c.label, "lang": c.lang, "auto": c.auto})).collect::<Vec<_>>(),
+        "sponsorblock": crate::pteron::settings().sponsorblock,
+        "plume": streamproxy::global().map(|p| p.plume_url()).unwrap_or_default(),
+    })
+    .to_string()
+    .replace('<', "\\u003c");
     let description_block = if description.trim().is_empty() {
         String::new()
     } else {
-        format!("<details class=\"desc\"><summary>Description</summary><div class=\"text\">{}</div></details>", linkify(&description))
+        format!(
+            "<details class=\"desc\"{}><summary>Description</summary><div class=\"text\">{}</div></details>",
+            if chapters.is_empty() { "" } else { " open" },
+            crate::plume::link_times(&linkify(&description))
+        )
     };
     let full_endpoint = streamproxy::global().map(|p| p.full_url()).unwrap_or_default();
     let memory_endpoint = streamproxy::global().map(|p| p.memory_url()).unwrap_or_default();
@@ -1279,11 +1539,13 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice], relat
     }))
     .unwrap_or_else(|_| "{}".into())
     .replace('<', "\\u003c");
-    let audio_url = choices[start].url.rsplit_once('/').map(|(base, _)| format!("{base}/0.mp4")).unwrap_or_default();
     let script = format!(
-        "var VID={vid};var AUDIO='{}';{}",
+        "var VID={vid};var AUDIO='{}';var PX={extra_data};{}",
         esc(&audio_url),
-        PLAYER_JS.replace("@FULL@", &full_endpoint).replace("@MEM@", &memory_endpoint)
+        PLAYER_JS
+            .replace("@FULL@", &full_endpoint)
+            .replace("@MEM@", &memory_endpoint)
+            .replace("/*@EXTRA@*/", PLAYER_EXTRA_JS)
     );
     let comments_endpoint = streamproxy::global().map(|p| p.comments_url()).unwrap_or_default();
     let comments_block = format!(
@@ -1301,18 +1563,21 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice], relat
         id = esc(id),
     );
     let body = format!(
-        "<div class=\"watch\"><div><video id=\"v\" controls autoplay data-duration=\"{}\"{partial_attr}{poster} src=\"{}\"></video>\
+        "<div class=\"watch\"><div><div class=\"vwrap\"><video id=\"v\" controls autoplay data-duration=\"{}\"{partial_attr}{poster} src=\"{}\"></video>\
+         <div id=\"ccbox\" class=\"cc\"></div><div id=\"sbn\" class=\"sbn\" style=\"display:none\"></div></div>\
          <p id=\"e\" class=\"err\" style=\"display:none\"></p>\
          <div id=\"rs\" style=\"display:none\"><button type=\"button\" id=\"rsb\" class=\"qbtn\"></button><button type=\"button\" id=\"rso\" class=\"qbtn\">Start over</button></div>\
          <h1>{}</h1>\
-         <div class=\"row\">{author}<span class=\"meta\">{}</span><span class=\"sp\"></span>\
+         <div class=\"row\">{author}{subscribe}<span class=\"meta\">{}</span><span class=\"sp\"></span>\
          <button type=\"button\" id=\"dv\" class=\"qbtn\" title=\"Save this video (.mp4) to your Downloads folder\">Download video</button>\
          <button type=\"button\" id=\"da\" class=\"qbtn\" title=\"Save only the sound as an MP3 in your Downloads folder\">Download MP3</button>\
          <button type=\"button\" id=\"wl\" class=\"qbtn\">Watch later</button><button type=\"button\" id=\"th\" class=\"qbtn\">Theater</button>\
+         <button type=\"button\" id=\"lp\" class=\"qbtn\" title=\"Play this video again and again\">Loop</button>\
+         <button type=\"button\" id=\"an\" class=\"qbtn\" title=\"When the video ends, play the first one in Up next\">Autoplay next</button>\
          <div class=\"pick qwrap\"><span id=\"res\" class=\"meta\"></span><span>Speed</span><button type=\"button\" id=\"sb\" class=\"qbtn\"></button>\
          <div id=\"sm\" class=\"qmenu\" style=\"display:none\"></div>\
          <span>Quality</span><button type=\"button\" id=\"qb\" class=\"qbtn\"></button>\
-         <div id=\"qm\" class=\"qmenu\" style=\"display:none\"></div><select id=\"q\" style=\"display:none\">{options}</select></div>\
+         <div id=\"qm\" class=\"qmenu\" style=\"display:none\"></div><select id=\"q\" style=\"display:none\">{options}</select>{subtitles}</div>\
          <a class=\"plain\" href=\"{}#{FRAGMENT_DIRECT}\">Open on YouTube</a></div>\
          {description_block}{comments_block}</div>{next}</div>\
          <script>{script}</script>",
@@ -1328,8 +1593,6 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice], relat
 fn video_page(id: &str) -> String {
     let request = Request::Video(id.to_string());
     let started = std::time::Instant::now();
-    let related_id = id.to_string();
-    let related_job = std::thread::spawn(move || innertube::related(&related_id).unwrap_or_default());
     let info = match innertube::player(id) {
         Ok(info) => {
             crate::crashlog::note(&format!("video {id}: stream list in {} ms", started.elapsed().as_millis()));
@@ -1370,8 +1633,7 @@ fn video_page(id: &str) -> String {
             return error_html(&request, &format!("Pteron could not prepare this video: {message}"));
         }
     }
-    let related = related_job.join().unwrap_or_default();
-    player_html(id, &info, &choices, &related)
+    player_html(id, &info, &choices)
 }
 
 fn fetch(request: &Request) {
@@ -1646,6 +1908,12 @@ mod tests {
                 audio: streamproxy::StreamInfo { itag: 140, url: String::new(), index_end: 0, height: 0, fps: 0 },
                 duration_ms: 212_000,
             },
+            captions: vec![innertube::Caption {
+                url: "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en".into(),
+                label: "English".into(),
+                lang: "en".into(),
+                auto: false,
+            }],
         }
     }
 
@@ -1666,6 +1934,7 @@ mod tests {
     #[test]
     fn channel_page() {
         let channel = innertube::Channel {
+            id: "UCuAXFkgsw1L7xaCfnd5JJOw".into(),
             title: "8-Bit <Ryan>".into(),
             handle: "@8BitRyan".into(),
             avatar: "https://yt3.googleusercontent.com/a".into(),
@@ -1713,13 +1982,13 @@ mod tests {
         let html = comment_html(&c);
         assert!(html.contains("&lt;i&gt;Bob") && !html.contains("<script>"));
         assert!(html.contains("12 likes") && html.contains("href=\"https://example.com/a\""));
-        let page = player_html("dQw4w9WgXcQ", &info(), &choices(), &[]);
+        let page = player_html("dQw4w9WgXcQ", &info(), &choices());
         assert!(page.contains("Show comments") && page.contains("data-t=\"dQw4w9WgXcQ\""));
     }
 
     #[test]
     fn builds_a_safe_player_page() {
-        let html = player_html("dQw4w9WgXcQ", &info(), &choices(), &[]);
+        let html = player_html("dQw4w9WgXcQ", &info(), &choices());
         assert!(html.contains("<video"));
         assert!(html.contains("src=\"http://127.0.0.1:9/v/t/720p.mp4\""));
         assert!(html.contains("<option value=\"http://127.0.0.1:9/v/t/1080.mp4\" data-p=\"http://127.0.0.1:9/v/t/1080p.mp4\" data-k=\"t_1080\">1080p"));

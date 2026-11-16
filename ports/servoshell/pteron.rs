@@ -93,6 +93,10 @@ pub(crate) struct Settings {
     pub block_third_party_cookies: bool,
     /// Warn before known phishing and malware sites (free lists, checked on this computer).
     pub block_dangerous_sites: bool,
+    /// Plume: skip sponsor segments marked by the SponsorBlock community (asks sponsor.ajay.app).
+    pub sponsorblock: bool,
+    /// Plume Music: synced lyrics from lrclib.net.
+    pub lyrics: bool,
     /// Look for the https version of an http site before showing the warning.
     pub https_first: bool,
     /// Use the full EasyList and EasyPrivacy filter lists in the ad blocker (uses more memory).
@@ -146,6 +150,8 @@ impl Default for Settings {
             strict_security: false,
             block_third_party_cookies: false,
             block_dangerous_sites: true,
+            sponsorblock: false,
+            lyrics: false,
             https_first: true,
             adblock_filters: false,
             compat_tab_mode: "auto".to_string(),
@@ -235,6 +241,8 @@ pub(crate) fn apply_json(settings: &mut Settings, value: &serde_json::Value) {
         ("strict_security", &mut settings.strict_security),
         ("block_third_party_cookies", &mut settings.block_third_party_cookies),
         ("block_dangerous_sites", &mut settings.block_dangerous_sites),
+        ("sponsorblock", &mut settings.sponsorblock),
+        ("lyrics", &mut settings.lyrics),
         ("https_first", &mut settings.https_first),
         ("adblock_filters", &mut settings.adblock_filters),
         ("compat_tab_no_gpu", &mut settings.compat_tab_no_gpu),
@@ -380,7 +388,7 @@ pub(crate) fn update(new_settings: Settings) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "engine": new_settings.engine,
         "searxng_url": new_settings.searxng_url,
         "theme": new_settings.theme,
@@ -410,9 +418,6 @@ pub(crate) fn update(new_settings: Settings) {
         "multi_engines": new_settings.multi_engines,
         "strip_tracking": new_settings.strip_tracking,
         "privacy_signals": new_settings.privacy_signals,
-        "strict_security": new_settings.strict_security,
-        "block_third_party_cookies": new_settings.block_third_party_cookies,
-        "block_dangerous_sites": new_settings.block_dangerous_sites,
         "https_first": new_settings.https_first,
         "adblock_filters": new_settings.adblock_filters,
         "compat_tab_mode": new_settings.compat_tab_mode,
@@ -422,6 +427,12 @@ pub(crate) fn update(new_settings: Settings) {
         "compat_tab_sites": new_settings.compat_tab_sites,
         "look": new_settings.look,
     });
+    // (Added one by one: one json! call this long runs out of macro depth.)
+    json["strict_security"] = serde_json::json!(new_settings.strict_security);
+    json["block_third_party_cookies"] = serde_json::json!(new_settings.block_third_party_cookies);
+    json["block_dangerous_sites"] = serde_json::json!(new_settings.block_dangerous_sites);
+    json["sponsorblock"] = serde_json::json!(new_settings.sponsorblock);
+    json["lyrics"] = serde_json::json!(new_settings.lyrics);
     if let Err(error) = std::fs::write(&path, json.to_string()) {
         warn!("Could not save {}: {error}", path.display());
     }
@@ -856,15 +867,18 @@ pub(crate) fn known_issues_html() -> String {
 <div class=card><h2>YouTube</h2><ul>\
 <li>Videos play up to 1080p60 in the H.264 format. VP9, AV1 and 4K are not supported.</li>\
 <li>Very long videos can take several seconds to become fully seekable, and YouTube may slow requests down.</li>\
+<li>Subtitles are YouTube&#39;s own (including automatic ones); styling such as position and colour is not kept. SponsorBlock segments come from volunteers and can be missing or a little off.</li>\
 <li>1080p60 on a slow computer can look soft or stutter. Try 720p60.</li></ul></div>\
 <div class=card><h2>Plume Music</h2><ul>\
 <li>Songs come from YouTube, so search results are ordinary YouTube results, not a curated music catalogue.</li>\
 <li>Very long tracks (mixes over about 20 minutes) take longer to start.</li>\
+<li>Lyrics come from lrclib.net and are found by title and artist, so some songs have none or the wrong ones.</li>\
 <li>Music keeps playing while you use other tabs, but only while the Music tab stays open.</li></ul></div>\
 <div class=card><h2>The browser</h2><ul>\
-<li>Windows and Linux (the Linux build is new and runs in X11 mode); macOS comes later. Saved passwords work on Windows only for now. No extensions and no private window. Downloads (the buttons in Plume and Plume Music) save .mp4 video and .mp3 audio. Saved passwords work on ordinary login forms; some sites with unusual forms may not offer to save, and there is no import from other browsers yet. The ad blocker only covers well-known ad and tracker networks (turn it off in Settings if a page looks broken).</li>\
+<li>Windows and Linux (the Linux build is new and runs in X11 mode); macOS comes later. Saved passwords work on Windows and Linux (on Linux they are locked with a key in your system keyring, or in a key file only your account can read when there is no keyring). No extensions and no private window. Downloads (the buttons in Plume and Plume Music) save .mp4 video and .mp3 audio. Saved passwords work on ordinary login forms; some sites with unusual forms may not offer to save, and there is no import from other browsers yet. The ad blocker only covers well-known ad and tracker networks (turn it off in Settings if a page looks broken).</li>\
 <li>The installer is not signed yet, so Windows shows a &quot;protected your PC&quot; warning. Choose <b>More info</b>, then <b>Run anyway</b>.</li>\
-<li>The memory savings have not been measured against other browsers yet.</li></ul></div>\
+<li>Memory was measured once (build 62, Linux, no graphics card; <i>benchmarks/report.md</i> in Pteron&#39;s repository): a single page took less than Firefox and about the same as Chrome, but with ten tabs open Chrome and Firefox used less, even after Pteron&#39;s background tabs went to sleep. Work on that continues.</li>\
+<li>Muting a tab mutes its audio and video elements; sound made with the Web Audio API (some games and players) keeps playing.</li></ul></div>\
 <p>Something not on this list? <b>Settings &rarr; About &rarr; Report a problem</b>.</p>",
         crate::updater::BUILD
     )

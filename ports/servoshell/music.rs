@@ -39,11 +39,13 @@ pub(crate) struct Queue {
     pub volume: f64,
     /// Where to go on "next" after the playing song was removed from the queue.
     resume: usize,
+    /// Radio: when the queue runs out, songs like the last one are added.
+    pub radio: bool,
 }
 
 impl Default for Queue {
     fn default() -> Self {
-        Queue { tracks: Vec::new(), cur: None, repeat: 0, volume: 0.8, resume: 0 }
+        Queue { tracks: Vec::new(), cur: None, repeat: 0, volume: 0.8, resume: 0, radio: false }
     }
 }
 
@@ -196,6 +198,7 @@ impl Queue {
             "cur": self.cur,
             "repeat": self.repeat,
             "vol": self.volume,
+            "radio": self.radio,
         })
     }
 
@@ -214,6 +217,7 @@ impl Queue {
             .filter(|c| *c < queue.tracks.len());
         queue.repeat = v.get("repeat").and_then(|r| r.as_u64()).filter(|r| *r <= 2).unwrap_or(0) as u8;
         queue.volume = v.get("vol").and_then(|x| x.as_f64()).filter(|x| (0.0..=1.0).contains(x)).unwrap_or(0.8);
+        queue.radio = v.get("radio").and_then(|r| r.as_bool()).unwrap_or(false);
         queue
     }
 }
@@ -469,7 +473,8 @@ pub(crate) fn command(value: &str) -> String {
             let title = clip(v.get("title").and_then(|t| t.as_str()).unwrap_or(""), 100);
             if streamproxy::global().is_some_and(|p| p.is_media_url(url)) {
                 let channel = clip(v.get("channel").and_then(|t| t.as_str()).unwrap_or(""), 120);
-                crate::downloads::begin_media(url, &title, &channel, true);
+                let video_id = v.get("id").and_then(|t| t.as_str()).unwrap_or("");
+                crate::downloads::begin_media(url, &title, &channel, true, video_id);
                 json!({"ok": true}).to_string()
             } else {
                 error("bad file")
@@ -503,9 +508,26 @@ pub(crate) fn command(value: &str) -> String {
         },
         "next" => {
             let (moved, mut state) = with_queue(|q| q.advance(arg == "user"), true);
+            // Radio: at the end of the queue, songs like the last one are added and played.
+            if !moved && let Some(last) = with_queue(|q| if q.radio { q.current().cloned() } else { None }, false).0 {
+                let fresh = radio_songs(&last);
+                if !fresh.is_empty() {
+                    let (moved, mut state) = with_queue(
+                        |q| {
+                            let added = fresh.into_iter().filter(|t| q.add(t.clone())).count();
+                            added > 0 && q.advance(false)
+                        },
+                        true,
+                    );
+                    state["moved"] = json!(moved);
+                    return state.to_string();
+                }
+            }
             state["moved"] = json!(moved);
             state.to_string()
         },
+        "radio" => with_queue(|q| q.radio = arg == "1", true).1.to_string(),
+        "lyrics" => lyrics_json(arg).to_string(),
         "prev" => {
             let (moved, mut state) = with_queue(|q| q.back(), true);
             state["moved"] = json!(moved);
@@ -529,6 +551,116 @@ pub(crate) fn command(value: &str) -> String {
         },
         _ => error("unknown command"),
     }
+}
+
+/// Up to ten songs like `last` (YouTube's "Up next" for it), music-length only.
+fn radio_songs(last: &Track) -> Vec<Track> {
+    innertube::related(&last.id)
+        .unwrap_or_default()
+        .iter()
+        .filter(|i| i.duration_secs.is_none_or(|d| (60..=15 * 60).contains(&d)))
+        .take(10)
+        .map(Track::from_item)
+        .collect()
+}
+
+// ---------------------------------------------------------------- lyrics (lrclib.net)
+
+/// "Artist - Song (Official Video) [4K]" becomes ("Artist", "Song"); the channel ("Artist - Topic")
+/// is used when the title has no artist.
+pub(crate) fn song_and_artist(title: &str, channel: &str) -> (String, String) {
+    let mut clean = String::new();
+    let mut depth = 0;
+    for c in title.chars() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => clean.push(c),
+            _ => {},
+        }
+    }
+    let clean = clean.replace(" | ", " - ");
+    let cut = |text: &str| {
+        let lower = text.to_lowercase();
+        let end = [" ft.", " feat.", " ft ", " feat ", " official", " lyrics", " lyric video", " music video", " audio"]
+            .iter()
+            .filter_map(|word| lower.find(word))
+            .min()
+            .unwrap_or(text.len());
+        text[..end].trim().trim_matches(|c: char| c == '-' || c == '"' || c == '\'' || c.is_whitespace()).to_string()
+    };
+    match clean.split_once(" - ") {
+        Some((artist, song)) => (cut(song), cut(artist)),
+        None => (cut(&clean), channel.trim_end_matches(" - Topic").trim().to_string()),
+    }
+}
+
+/// `[mm:ss.xx] line` lines as (seconds, line).
+pub(crate) fn parse_lrc(text: &str) -> Vec<(f64, String)> {
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let mut rest = line.trim();
+        let mut times = Vec::new();
+        while let Some(stripped) = rest.strip_prefix('[') {
+            let Some(end) = stripped.find(']') else { break };
+            let stamp = &stripped[..end];
+            if let Some((m, s)) = stamp.split_once(':') &&
+                let (Ok(m), Ok(s)) = (m.parse::<f64>(), s.parse::<f64>())
+            {
+                times.push(m * 60.0 + s);
+            }
+            rest = &stripped[end + 1..];
+        }
+        for t in times {
+            lines.push((t, rest.trim().to_string()));
+        }
+    }
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    lines
+}
+
+/// `lyrics:{"title","channel","duration"}`: `{"synced": [[seconds, line]...], "plain": text}`,
+/// `{"off": true}` when lyrics are switched off, or `{"none": true}`.
+fn lyrics_json(arg: &str) -> Value {
+    if !crate::pteron::settings().lyrics {
+        return json!({"off": true});
+    }
+    let v: Value = serde_json::from_str(arg).unwrap_or(Value::Null);
+    let title = clip(v.get("title").and_then(|t| t.as_str()).unwrap_or(""), 200);
+    let channel = clip(v.get("channel").and_then(|t| t.as_str()).unwrap_or(""), 120);
+    let duration = v.get("duration").and_then(|d| d.as_u64()).unwrap_or(0);
+    let (song, artist) = song_and_artist(&title, &channel);
+    if song.is_empty() {
+        return json!({"none": true});
+    }
+    let encode = |t: &str| url::form_urlencoded::byte_serialize(t.as_bytes()).collect::<String>();
+    let mut url = format!("https://lrclib.net/api/get?track_name={}&artist_name={}", encode(&song), encode(&artist));
+    if duration > 0 {
+        url.push_str(&format!("&duration={duration}"));
+    }
+    let found = innertube::get_text(&url)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .filter(|v| v.get("syncedLyrics").is_some_and(|l| l.is_string()) || v.get("plainLyrics").is_some_and(|l| l.is_string()))
+        .or_else(|| {
+            // Not found by name: search, and take the first match of about the same length.
+            let search = format!("https://lrclib.net/api/search?q={}", encode(&format!("{artist} {song}")));
+            let list: Value = serde_json::from_str(&innertube::get_text(&search).ok()?).ok()?;
+            list.as_array()?
+                .iter()
+                .find(|item| {
+                    let d = item.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
+                    item.get("syncedLyrics").is_some_and(|l| l.is_string()) && (duration == 0 || (d - duration as f64).abs() < 6.0)
+                })
+                .cloned()
+        });
+    let Some(found) = found else { return json!({"none": true}) };
+    let synced = found.get("syncedLyrics").and_then(|l| l.as_str()).map(parse_lrc).unwrap_or_default();
+    let plain = found.get("plainLyrics").and_then(|l| l.as_str()).unwrap_or("");
+    json!({
+        "synced": synced.iter().take(400).map(|(t, l)| json!([t, clip(l, 200)])).collect::<Vec<_>>(),
+        "plain": plain.chars().take(8000).collect::<String>(),
+    })
 }
 
 // ---------------------------------------------------------------- the page
@@ -558,6 +690,15 @@ h2{font-size:15px;margin:6px 0 10px;color:var(--mut);font-weight:600}
 .row .t{flex:1;min-width:0;cursor:pointer}
 .row .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .c{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.small.on{border-color:var(--gold);color:var(--gold)}
+.atabs{display:flex;gap:6px;margin:4px 0 10px}
+.atabs button{padding:5px 14px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--mut);font-size:14px;font-weight:600}
+.atabs button.on{border-color:var(--gold);color:var(--fg)}
+.ly{max-height:calc(100vh - 230px);overflow-y:auto;padding:4px 6px 40px}
+.ly .ll{margin:0;padding:5px 8px;border-radius:8px;color:var(--mut);font-size:17px;line-height:1.4;cursor:pointer}
+.ly .ll:hover{background:var(--card)}
+.ly .ll.now{color:var(--fg);font-weight:600;background:var(--card)}
+.ly .plain{white-space:pre-wrap;color:var(--fg);font-size:15px}
 .row .d{color:var(--mut);font-size:13px;min-width:42px;text-align:right}
 .ib{border:0;background:transparent;color:var(--mut);font-size:18px;line-height:1;padding:4px 7px;border-radius:7px}
 .ib:hover{color:var(--gold);background:rgba(214,170,72,.14)}
@@ -598,7 +739,7 @@ header{background:linear-gradient(180deg,rgba(214,170,72,.10),transparent 120%),
 
 const JS: &str = r#"
 (function(){
-var U='@U@',A=document.getElementById('a'),Q={tracks:[],cur:null,repeat:0,vol:0.8},R={},gen=0,asked={},next=null,title='',Lib={liked:[],lists:[]},LK={};
+var U='@U@',LYR='@LYR@',A=document.getElementById('a'),Q={tracks:[],cur:null,repeat:0,vol:0.8},R={},gen=0,asked={},next=null,title='',Lib={liked:[],lists:[]},LK={};
 function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e;}
 function $(i){return document.getElementById(i);}
 // Servo cannot drag a real range input yet, so the two sliders are drawn and handled here.
@@ -625,7 +766,7 @@ function paintHearts(){var all=document.querySelectorAll('[data-h]');for(var i=0
 function dlbtn(t){var b=el('button','ib','\u2B07');b.title='Download this song as an MP3';b.onclick=function(e){e.stopPropagation();
   say('Getting '+t.title+' ready to download...');
   resolve(t.id,function(d,err){if(!d){say('Could not download'+(err?' ('+err+')':'')+'.');return;}
-    api('dl',JSON.stringify({url:d.url,title:t.title,channel:t.channel}),function(r){say(r&&r.ok?'Downloading '+t.title+' - see the sidebar.':'Could not start the download.');});});};return b;}
+    api('dl',JSON.stringify({url:d.url,title:t.title,channel:t.channel,id:t.id}),function(r){say(r&&r.ok?'Downloading '+t.title+' - see the sidebar.':'Could not start the download.');});});};return b;}
 function heart(t){var b=el('button','ib','♡');b.setAttribute('data-h',t.id);b.onclick=function(e){e.stopPropagation();api('like',JSON.stringify(t),function(d){setLib(d);});};return b;}
 function say(m){var s=$('msg');s.textContent=m||'';}
 function renderQ(){
@@ -642,6 +783,7 @@ function renderQ(){
   });
   paintHearts();
   $('rep').textContent='Repeat: '+['off','all','one'][Q.repeat||0];
+  $('rad').textContent='Radio: '+(Q.radio?'on':'off');$('rad').className='small'+(Q.radio?' on':'');
   var cur=Q.tracks[Q.cur];
   title=cur?cur.title:'';
   $('nt').textContent=cur?cur.title:'Nothing playing';
@@ -719,7 +861,7 @@ function play(i){
     resolve(t.id,function(d,err){
       if(my!==gen)return;
       if(!d){$('nc').textContent='Could not play this song'+(err?' ('+err+')':'')+'.';setTimeout(function(){if(my===gen)advance('auto');},1500);return;}
-      A.src=d.url;A.play();$('nc').textContent=t.channel;
+      A.src=d.url;A.play();$('nc').textContent=t.channel;loadLyrics(t);
     });
   });
 }
@@ -767,6 +909,39 @@ $('more').onclick=function(){if(!next)return;var tok=next;next=null;api('more',t
 $('sf').addEventListener('submit',function(e){e.preventDefault();var v=$('qi').value.trim();if(v)search(v);});
 function fromHash(){var m=location.hash.match(/list=([A-Za-z0-9_-]{10,64})/);if(m){$('qi').value='';search('list='+m[1]);}}
 window.addEventListener('hashchange',fromHash);
+// ---- radio, sleep timer and synced lyrics
+$('rad').onclick=function(){api('radio',Q.radio?0:1,function(st){setQ(st);say(st&&st.radio?'Radio is on: when the queue ends, songs like the last one play.':'');});};
+var SLEEP=[0,15,30,60],sleepI=0,sleepAt=0,sleepVol=null;
+function sleepPaint(){var b=$('slp');if(!sleepAt){b.textContent='Sleep timer: off';b.className='small';return;}
+  var m=Math.max(0,Math.ceil((sleepAt-Date.now())/60000));b.textContent='Sleep in '+m+' min';b.className='small on';}
+$('slp').onclick=function(){sleepI=(sleepI+1)%SLEEP.length;sleepAt=SLEEP[sleepI]?Date.now()+SLEEP[sleepI]*60000:0;
+  if(sleepVol!==null){A.volume=sleepVol;sleepVol=null;}sleepPaint();};
+setInterval(function(){if(!sleepAt)return;var left=sleepAt-Date.now();
+  if(left<=10000&&left>0){if(sleepVol===null)sleepVol=A.volume;A.volume=Math.max(0,sleepVol*left/10000);}
+  if(left<=0){A.pause();if(sleepVol!==null){A.volume=sleepVol;sleepVol=null;}sleepAt=0;sleepI=0;say('Sleep timer: music stopped.');}
+  sleepPaint();},1000);
+var LY=[],lyOn=-1,lyFor=null;
+function tab(lyrics){$('tq').className=lyrics?'':'on';$('tly').className=lyrics?'on':'';$('qp').hidden=lyrics;$('lyp').hidden=!lyrics;}
+$('tq').onclick=function(){tab(false);};$('tly').onclick=function(){tab(true);};
+function lyMsg(m){var b=$('ly');b.textContent='';b.appendChild(el('div','msg',m));}
+function loadLyrics(t){
+  if(!LYR){lyMsg('Synced lyrics are off. Turn them on in Settings, Video (the song title and artist are then sent to lrclib.net).');return;}
+  if(lyFor===t.id)return;lyFor=t.id;LY=[];lyOn=-1;lyMsg('Looking for the lyrics...');
+  api('lyrics',JSON.stringify({title:t.title,channel:t.channel,duration:t.duration||0}),function(d){
+    if(lyFor!==t.id)return;var b=$('ly');b.textContent='';
+    if(d&&d.synced&&d.synced.length){LY=d.synced;LY.forEach(function(x,i){var p=el('p','ll',x[1]||'♪');p.setAttribute('data-i',i);
+      p.onclick=function(){A.currentTime=x[0];};b.appendChild(p);});}
+    else if(d&&d.plain){b.appendChild(el('div','plain',d.plain));}
+    else{lyMsg('No lyrics found for this song.');}});
+}
+// (Also four times a second, in case the engine sends few 'timeupdate' events.)
+setInterval(function(){if(!A.paused)lyTick();},250);
+A.addEventListener('timeupdate',lyTick);
+function lyTick(){
+  if(!LY.length)return;var t=A.currentTime+0.25,i=-1;for(var k=0;k<LY.length;k++){if(LY[k][0]<=t)i=k;else break;}
+  if(i===lyOn)return;var b=$('ly'),old=b.querySelector('.ll.now');if(old)old.className='ll';lyOn=i;
+  if(i>=0){var p=b.querySelector('[data-i="'+i+'"]');if(p){p.className='ll now';if(!$('lyp').hidden){b.scrollTop=Math.max(0,p.offsetTop-b.offsetTop-b.clientHeight/3);}}}
+}
 // the helper tells the page what the sidebar asked for, about once a second
 setInterval(function(){
   api('hb',JSON.stringify({playing:!A.paused&&!A.ended,title:title}),function(d){
@@ -784,7 +959,7 @@ api('get',null,function(st){
 
 pub(crate) fn page_html() -> String {
     let url = streamproxy::global().map(|p| p.music_url()).unwrap_or_default();
-    let js = JS.replace("@U@", &url);
+    let js = JS.replace("@U@", &url).replace("@LYR@", if crate::pteron::settings().lyrics { "1" } else { "" });
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <title>Plume Music</title><style>{CSS}</style></head><body>\
@@ -796,10 +971,12 @@ pub(crate) fn page_html() -> String {
          <main><div class=\"cols\"><section><h2 id=\"lt\">Search for music</h2><div id=\"msg\" class=\"msg\"></div>\
          <div id=\"res\"><div class=\"msg\">Type a song or artist above. To play an album or playlist, paste its link.</div></div>\
          <button id=\"more\" class=\"small\" hidden>Show more</button></section>\
-         <aside><h2>Queue <span id=\"qn\"></span></h2>\
-         <div class=\"tools\"><button id=\"rep\" class=\"small\">Repeat: off</button><button id=\"sh\" class=\"small\">Shuffle</button><button id=\"clr\" class=\"small\">Clear</button></div>\
+         <aside><div class=\"atabs\"><button id=\"tq\" class=\"on\">Queue <span id=\"qn\"></span></button><button id=\"tly\">Lyrics</button></div>\
+         <div id=\"qp\"><div class=\"tools\"><button id=\"rep\" class=\"small\">Repeat: off</button><button id=\"sh\" class=\"small\">Shuffle</button><button id=\"clr\" class=\"small\">Clear</button></div>\
+         <div class=\"tools\"><button id=\"rad\" class=\"small\" title=\"When the queue ends, keep playing songs like the last one\">Radio: off</button>\
+         <button id=\"slp\" class=\"small\" title=\"Fade out and stop after a while\">Sleep timer: off</button></div>\
          <div class=\"tools\"><input id=\"pn\" placeholder=\"Playlist name\" maxlength=\"60\"><button id=\"ps\" class=\"small\">Save queue</button></div>\
-         <div id=\"q\"></div></aside></div></main>\
+         <div id=\"q\"></div></div><div id=\"lyp\" hidden><div id=\"ly\" class=\"ly\"></div></div></aside></div></main>\
          <div id=\"bar\"><div id=\"now\"><b id=\"nt\">Nothing playing</b><span id=\"nc\"></span></div><button id=\"lk\" class=\"ib\" hidden>\u{2661}</button><button id=\"dlc\" class=\"ib\" title=\"Download this song as an MP3\">\u{2B07}</button>\
          <div id=\"ctl\"><button id=\"pv\" class=\"ib\" title=\"Previous\">\u{23EE}</button>\
          <button id=\"pp\" title=\"Play or pause\">\u{25B6}</button>\
@@ -813,6 +990,25 @@ pub(crate) fn page_html() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn song_names_and_lrc() {
+        assert_eq!(song_and_artist("Daft Punk - Get Lucky (Official Video) ft. Pharrell", "Daft Punk"), ("Get Lucky".into(), "Daft Punk".into()));
+        assert_eq!(song_and_artist("Blinding Lights", "The Weeknd - Topic"), ("Blinding Lights".into(), "The Weeknd".into()));
+        assert_eq!(song_and_artist("Artist | Song [4K]", "x"), ("Song".into(), "Artist".into()));
+        let lrc = "[ar:Someone]\n[00:12.50]First line\n[01:02.00][02:03.00]Chorus\n[00:05.00]\n";
+        let lines = parse_lrc(lrc);
+        assert_eq!(lines.iter().map(|(t, _)| *t).collect::<Vec<_>>(), vec![5.0, 12.5, 62.0, 123.0]);
+        assert_eq!(lines[1].1, "First line");
+        assert_eq!(lines[2].1, "Chorus");
+    }
+
+    #[test]
+    fn radio_is_remembered() {
+        let mut q = queue_of(2);
+        q.radio = true;
+        assert!(Queue::from_json(&q.to_json().to_string()).radio);
+    }
 
     fn track(id: &str) -> Track {
         Track { id: id.into(), title: format!("t{id}"), channel: "c".into(), duration: 100 }

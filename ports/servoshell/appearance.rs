@@ -411,13 +411,22 @@ pub(crate) fn run_chooser_script(script_text: &str, folder: bool) -> Result<Opti
 /// `Ok(None)` when the user closed it without choosing.
 #[cfg(not(windows))]
 fn linux_chooser(folder: bool) -> Result<Option<String>, String> {
-    let title = if folder { "Choose a folder" } else { "Choose a background picture" };
+    if folder {
+        linux_chooser_with("Choose a folder", "", &[], true)
+    } else {
+        linux_chooser_with("Choose a background picture", "Pictures", &["jpg", "jpeg", "png", "webp", "gif"], false)
+    }
+}
+
+#[cfg(not(windows))]
+fn linux_chooser_with(title: &str, label: &str, extensions: &[&str], folder: bool) -> Result<Option<String>, String> {
+    let patterns = extensions.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ");
     let mut tries: Vec<(&str, Vec<String>)> = Vec::new();
     let mut zenity = vec!["--file-selection".to_string(), format!("--title={title}")];
     if folder {
         zenity.push("--directory".into());
-    } else {
-        zenity.push("--file-filter=Pictures | *.jpg *.jpeg *.png *.webp *.gif".into());
+    } else if !patterns.is_empty() {
+        zenity.push(format!("--file-filter={label} | {patterns}"));
     }
     tries.push(("zenity", zenity));
     let home = ::dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_else(|| ".".into());
@@ -426,7 +435,7 @@ fn linux_chooser(folder: bool) -> Result<Option<String>, String> {
         if folder {
             vec!["--getexistingdirectory".into(), home.clone()]
         } else {
-            vec!["--getopenfilename".into(), home, "*.jpg *.jpeg *.png *.webp *.gif|Pictures".into()]
+            vec!["--getopenfilename".into(), home, format!("{patterns}|{label}")]
         },
     ));
     for (program, args) in tries {
@@ -439,6 +448,26 @@ fn linux_chooser(folder: bool) -> Result<Option<String>, String> {
         }
     }
     Err("Install zenity or kdialog to choose a file.".into())
+}
+
+/// The system's file chooser for one kind of file (`title` and `label` are fixed texts, without
+/// quotes). `Ok(None)` when the user closed it without choosing.
+pub(crate) fn choose_file(title: &str, label: &str, extensions: &[&str]) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let pattern = extensions.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(";");
+        let script = format!(
+            "param([string]$Out)\nAdd-Type -AssemblyName System.Windows.Forms\n\
+             $d = New-Object System.Windows.Forms.OpenFileDialog\n$d.Title = '{title}'\n\
+             $d.Filter = '{label} ({pattern})|{pattern}'\n\
+             if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Set-Content -Path $Out -Value $d.FileName -Encoding UTF8 }}\n"
+        );
+        run_chooser_script(&script, false)
+    }
+    #[cfg(not(windows))]
+    {
+        linux_chooser_with(title, label, extensions, false)
+    }
 }
 
 /// `Ok(None)` when the user closed the dialog without choosing.

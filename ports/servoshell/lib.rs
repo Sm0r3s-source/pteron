@@ -50,6 +50,7 @@ mod secure;
 mod sitecheck;
 mod sync;
 mod updater;
+mod plume;
 mod youtube;
 #[cfg(not(any(target_os = "android", target_env = "ohos")))]
 mod resources;

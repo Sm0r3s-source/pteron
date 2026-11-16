@@ -1022,6 +1022,9 @@ impl WebViewDelegate for RunningAppState {
         if status != LoadStatus::HeadParsed {
             window.note_load_status(&webview, status == LoadStatus::Complete);
         }
+        if status != LoadStatus::Started {
+            window.reapply_mute(&webview);
+        }
 
         if status == LoadStatus::Complete {
             if let Some(url) = webview.url() {
