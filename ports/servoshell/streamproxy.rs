@@ -37,6 +37,8 @@ const MAX_SESSIONS: usize = 4;
 /// The first part of a video that is made ready at once (seconds), so playback can start
 /// while the whole file layout is still being worked out.
 pub(crate) const PARTIAL_SECS: f64 = 75.0;
+/// Long videos go through a second, bigger start file (ready while the first plays) before the whole one.
+pub(crate) const MID_SECS: f64 = 600.0;
 const MAX_CONNECTIONS: usize = 12;
 /// Same identity yt-dlp presents for this client.
 pub(crate) const UPSTREAM_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
@@ -151,7 +153,8 @@ impl Session {
 #[derive(Default)]
 struct State {
     sets: Vec<(String, Arc<VideoSet>)>,
-    sessions: Vec<((String, u32, bool), Arc<Session>)>,
+    /// (token, itag, size): size 0 is the whole file, 1 the quick first part, 2 the first ten minutes.
+    sessions: Vec<((String, u32, u8), Arc<Session>)>,
     /// Full layouts that are being built in the background.
     starting: Vec<(String, u32)>,
     /// The audio headers of a video are the same for every quality, so they are kept.
@@ -229,7 +232,7 @@ impl Proxy {
 
     /// Build the file layout of one quality now, so the first play request is answered at once.
     pub(crate) fn prepare(&self, token: &str, itag: u32, partial: bool) -> Result<(), String> {
-        session_for(&self.state, &self.net, &self.building, token, itag, partial).map(|_| ())
+        session_for(&self.state, &self.net, &self.building, token, itag, u8::from(partial)).map(|_| ())
     }
 
     /// Address (without the `?q=...`) a page can use to get search suggestions.
@@ -281,6 +284,11 @@ impl Proxy {
     /// The first couple of minutes only; ready much sooner than the whole file.
     pub(crate) fn partial_url(&self, token: &str, itag: u32) -> String {
         format!("http://127.0.0.1:{}/v/{token}/{itag}p.mp4", self.port)
+    }
+
+    /// The first ten minutes: ready while the first part plays, so a long video can be skipped around in.
+    pub(crate) fn mid_url(&self, token: &str, itag: u32) -> String {
+        format!("http://127.0.0.1:{}/v/{token}/{itag}m.mp4", self.port)
     }
 
     /// Address that starts building the whole file in the background and answers `1` once it
@@ -365,14 +373,15 @@ pub(crate) fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && start < total).then_some((start, end))
 }
 
-/// `/v/<token>/<itag>.mp4` (whole file) or `/v/<token>/<itag>p.mp4` (first part only).
-fn parse_path(path: &str) -> Option<(String, u32, bool)> {
+/// `/v/<token>/<itag>.mp4` (whole file), `...p.mp4` (first part only) or `...m.mp4` (first ten minutes).
+fn parse_path(path: &str) -> Option<(String, u32, u8)> {
     let rest = path.split('?').next()?.strip_prefix("/v/")?;
     let (token, file) = rest.split_once('/')?;
     let name = file.strip_suffix(".mp4")?;
-    let (digits, partial) = match name.strip_suffix('p') {
-        Some(d) => (d, true),
-        None => (name, false),
+    let (digits, partial) = match (name.strip_suffix('p'), name.strip_suffix('m')) {
+        (Some(d), _) => (d, 1),
+        (_, Some(d)) => (d, 2),
+        _ => (name, 0),
     };
     let itag = digits.parse::<u32>().ok()?;
     (token.len() == 32 && token.chars().all(|c| c.is_ascii_hexdigit())).then(|| (token.to_string(), itag, partial))
@@ -384,12 +393,13 @@ fn session_for(
     building: &Arc<Mutex<()>>,
     token: &str,
     itag: u32,
-    partial: bool,
+    tier: u8,
 ) -> Result<Arc<Session>, String> {
+    let partial = tier != 0;
     // A session in use moves to the end of the list, so the one dropped is the least recently used.
     let find = || {
         let mut guard = state.lock_ok();
-        let at = guard.sessions.iter().position(|((t, i, p), _)| t == token && *i == itag && *p == partial)?;
+        let at = guard.sessions.iter().position(|((t, i, p), _)| t == token && *i == itag && *p == tier)?;
         let entry = guard.sessions.remove(at);
         let session = entry.1.clone();
         guard.sessions.push(entry);
@@ -424,7 +434,7 @@ fn session_for(
             slots: Mutex::new(std::collections::HashMap::new()),
         });
         let mut guard = state.lock_ok();
-        guard.sessions.push(((token.to_string(), itag, false), session.clone()));
+        guard.sessions.push(((token.to_string(), itag, 0), session.clone()));
         if guard.sessions.len() > MAX_SESSIONS {
             guard.sessions.remove(0);
         }
@@ -432,7 +442,11 @@ fn session_for(
     }
     let video = set.videos.iter().find(|v| v.itag == itag).ok_or("unknown quality")?.clone();
     // The two streams are independent: headers first, then the per-segment tables.
-    let limit = partial.then_some(PARTIAL_SECS);
+    let limit = match tier {
+        1 => Some(PARTIAL_SECS),
+        2 => Some(MID_SECS),
+        _ => None,
+    };
     let cached_audio = if partial {
         None
     } else {
@@ -471,7 +485,11 @@ fn session_for(
     );
     crate::crashlog::note(&format!(
         "video helper: itag {itag}{} ready, {} pieces, {} bytes in total",
-        if partial { " (first part)" } else { "" },
+        match tier {
+            1 => " (first part)",
+            2 => " (first ten minutes)",
+            _ => "",
+        },
         layout.pieces.len(),
         layout.total
     ));
@@ -483,7 +501,7 @@ fn session_for(
         slots: Mutex::new(std::collections::HashMap::new()),
     });
     let mut guard = state.lock_ok();
-    guard.sessions.push(((token.to_string(), itag, partial), session.clone()));
+    guard.sessions.push(((token.to_string(), itag, tier), session.clone()));
     if guard.sessions.len() > MAX_SESSIONS {
         guard.sessions.remove(0);
     }
@@ -493,27 +511,34 @@ fn session_for(
 /// `1` when the whole-file layout of `token_itag` is ready; otherwise starts building it in
 /// the background (once) and answers `0`.
 fn full_status(state: &Arc<Mutex<State>>, net: &Net, building: &Arc<Mutex<()>>, key: &str) -> &'static str {
-    let Some((token, itag)) = key.rsplit_once('_').and_then(|(t, i)| Some((t, i.parse::<u32>().ok()?))) else {
+    // `<token>_<itag>` asks for the whole file, `<token>_<itag>m` for the first ten minutes.
+    let Some((token, itag, tier)) = key.rsplit_once('_').and_then(|(t, i)| match i.strip_suffix('m') {
+        Some(d) => Some((t, d.parse::<u32>().ok()?, 2u8)),
+        None => Some((t, i.parse::<u32>().ok()?, 0u8)),
+    }) else {
         return "0";
     };
     {
         let mut guard = state.lock_ok();
-        if guard.sessions.iter().any(|((t, i, p), _)| t == token && *i == itag && !*p) {
+        if guard.sessions.iter().any(|((t, i, p), _)| t == token && *i == itag && *p == tier) {
             return "1";
         }
-        if guard.starting.iter().any(|(t, i)| t == token && *i == itag) {
+        // (the building list is by itag: whole files and ten-minute files are told apart by a marker)
+        let marked = if tier == 2 { itag + 1_000_000 } else { itag };
+        if guard.starting.iter().any(|(t, i)| t == token && *i == marked) {
             return "0";
         }
-        guard.starting.push((token.to_string(), itag));
+        guard.starting.push((token.to_string(), marked));
     }
     let (state, net, building, token) = (state.clone(), net.clone(), building.clone(), token.to_string());
     std::thread::spawn(move || {
-        let result = session_for(&state, &net, &building, &token, itag, false);
+        let result = session_for(&state, &net, &building, &token, itag, tier);
         if let Err(message) = &result {
-            crate::crashlog::note(&format!("video helper: whole file for itag {itag} failed: {message}"));
+            crate::crashlog::note(&format!("video helper: file (size {tier}) for itag {itag} failed: {message}"));
         }
         // a failure may be tried again later
-        state.lock_ok().starting.retain(|(t, i)| !(*t == token && *i == itag));
+        let marked = if tier == 2 { itag + 1_000_000 } else { itag };
+        state.lock_ok().starting.retain(|(t, i)| !(*t == token && *i == marked));
     });
     "0"
 }
@@ -696,6 +721,12 @@ fn suggestions(query: &str) -> Vec<String> {
         "https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&ds=yt&hl=en&q={}",
         url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
     );
+    let headers = [("user-agent", UPSTREAM_USER_AGENT)];
+    let mut request = crate::httpc::Request::get(&address, Duration::from_secs(6));
+    request.headers = &headers;
+    if let Ok(reply) = crate::httpc::send(&request) {
+        return if reply.status == 200 { parse_suggestions(&String::from_utf8_lossy(&reply.body)) } else { Vec::new() };
+    }
     let output = curl_command()
         .args(["-sS", "--fail", "--proto", "=https", "--max-time", "6", "-A", UPSTREAM_USER_AGENT, "--"])
         .arg(&address)
@@ -832,6 +863,26 @@ pub(crate) fn curl_range(url: &str, start: u64, len: u64) -> Result<Vec<u8>, Str
         }
         wait_gate();
         *LAST_DATA.lock_ok() = Some(std::time::Instant::now());
+        let range = format!("bytes={}-{}", start, start + len.saturating_sub(1));
+        let headers = [("range", range.as_str()), ("user-agent", UPSTREAM_USER_AGENT)];
+        let mut request = crate::httpc::Request::get(url, Duration::from_secs(60));
+        (request.headers, request.max_body, request.follow, request.stay_in) = (&headers, len as usize + 1, true, "googlevideo.com");
+        match crate::httpc::send(&request) {
+            Ok(reply) if matches!(reply.status, 200 | 206) && reply.body.len() as u64 == len => return Ok(reply.body),
+            Ok(reply) if (300..400).contains(&reply.status) => {}, // a redirect we did not follow: curl decides
+            Ok(reply) => {
+                last = if (200..300).contains(&reply.status) {
+                    format!("got {} bytes, expected {len}", reply.body.len())
+                } else {
+                    format!("error: {}", reply.status)
+                };
+                if refused(&last) || reply.body.is_empty() {
+                    throttled_for(&last, if small { Duration::from_millis(1200) } else { COOL_DOWN });
+                }
+                continue;
+            },
+            Err(_) => {}, // no connection of our own: try curl below
+        }
         let mut command = curl_command();
         command
             .args(["-sS", "--fail", "--proto", "=https", "--max-time", "60", "-A", UPSTREAM_USER_AGENT])
@@ -992,6 +1043,28 @@ fn curl_multi(url: &str, group: &[(u64, u64)], proto: &str) -> Result<Vec<Option
     }
     let spec: Vec<String> = group.iter().map(|(s, l)| format!("{}-{}", s, s + l - 1)).collect();
     let cap = group.iter().map(|(_, l)| *l as usize).sum::<usize>() + group.len() * 400 + 16384;
+    if proto == "=https" {
+        let range = format!("bytes={}", spec.join(","));
+        let headers = [("range", range.as_str()), ("user-agent", UPSTREAM_USER_AGENT)];
+        let mut request = crate::httpc::Request::get(url, Duration::from_secs(60));
+        (request.headers, request.max_body, request.follow, request.stay_in) = (&headers, cap, true, "googlevideo.com");
+        if let Ok(reply) = crate::httpc::send(&request) {
+            if matches!(reply.status, 401 | 403 | 429) {
+                return Err(format!("curl: (22) The requested URL returned error: {}", reply.status));
+            }
+            let boundary = reply
+                .content_type
+                .to_ascii_lowercase()
+                .contains("multipart/byteranges")
+                .then(|| {
+                    let i = reply.content_type.to_ascii_lowercase().find("boundary=")? + "boundary=".len();
+                    Some(reply.content_type[i..].trim().trim_matches('"').to_string())
+                })
+                .flatten();
+            let (true, Some(boundary)) = (reply.status == 206, boundary) else { return Err(UNSUPPORTED.into()) };
+            return Ok(multi_parts(group, &parse_multipart(&reply.body, &boundary)));
+        }
+    }
     let mut child = curl_command()
         .args(["-sS", "-i", "--proto", proto, "--max-time", "60", "-A", UPSTREAM_USER_AGENT])
         .arg("-H")
@@ -1042,8 +1115,11 @@ fn curl_multi(url: &str, group: &[(u64, u64)], proto: &str) -> Result<Vec<Option
         })
     });
     let (true, Some(boundary)) = (status == 206, boundary) else { return Err(UNSUPPORTED.into()) };
-    let parts = parse_multipart(&raw[at..], &boundary);
-    Ok(group
+    Ok(multi_parts(group, &parse_multipart(&raw[at..], &boundary)))
+}
+
+fn multi_parts(group: &[(u64, u64)], parts: &[(u64, Vec<u8>)]) -> Vec<Option<Vec<u8>>> {
+    group
         .iter()
         .map(|(s, l)| {
             parts
@@ -1051,7 +1127,7 @@ fn curl_multi(url: &str, group: &[(u64, u64)], proto: &str) -> Result<Vec<Option
                 .find(|(a, bytes)| a == s && bytes.len() as u64 >= *l)
                 .map(|(_, bytes)| bytes[..*l as usize].to_vec())
         })
-        .collect())
+        .collect()
 }
 
 /// One batch of header ranges: in one request when the server allows it, else one by one.
@@ -1195,9 +1271,10 @@ mod tests {
     #[test]
     fn paths_and_hosts() {
         let t = "0123456789abcdef0123456789abcdef";
-        assert_eq!(parse_path(&format!("/v/{t}/137.mp4")), Some((t.to_string(), 137, false)));
-        assert_eq!(parse_path(&format!("/v/{t}/137p.mp4")), Some((t.to_string(), 137, true)));
-        assert_eq!(parse_path(&format!("/v/{t}/137.mp4?x=1")), Some((t.to_string(), 137, false)));
+        assert_eq!(parse_path(&format!("/v/{t}/137.mp4")), Some((t.to_string(), 137, 0)));
+        assert_eq!(parse_path(&format!("/v/{t}/137p.mp4")), Some((t.to_string(), 137, 1)));
+        assert_eq!(parse_path(&format!("/v/{t}/137m.mp4")), Some((t.to_string(), 137, 2)));
+        assert_eq!(parse_path(&format!("/v/{t}/137.mp4?x=1")), Some((t.to_string(), 137, 0)));
         assert_eq!(parse_path("/v/short/137.mp4"), None);
         assert_eq!(parse_path(&format!("/v/{t}/../137.mp4")), None);
         assert_eq!(parse_path(&format!("/x/{t}/137.mp4")), None);

@@ -920,6 +920,12 @@ impl WebViewDelegate for RunningAppState {
             }
             return;
         }
+        // Pteron: Google result links open the real address straight away.
+        if let Some(target) = crate::privacy::unwrap_google_link(&navigation_request.url) {
+            navigation_request.deny();
+            webview.load(target);
+            return;
+        }
         // Pteron: sites that need the compatibility tab open there from the start.
         if let Some(page) = crate::compat_view::redirect(&crate::pteron::settings(), &navigation_request.url) {
             navigation_request.deny();

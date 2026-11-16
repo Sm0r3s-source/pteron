@@ -242,6 +242,8 @@ struct Store {
     positions: Vec<(String, u64)>,
     /// Channels followed without an account: (`UC...` id, name).
     subs: Vec<(String, String)>,
+    /// Playlists made by hand: (name, videos).
+    lists: Vec<(String, Vec<VideoItem>)>,
     prefs: PlayerPrefs,
 }
 
@@ -255,6 +257,8 @@ pub(crate) struct PlayerPrefs {
 }
 
 const MAX_SUBS: usize = 500;
+const MAX_LISTS: usize = 40;
+const MAX_LIST_ITEMS: usize = 300;
 
 pub(crate) fn valid_channel_id(id: &str) -> bool {
     id.starts_with("UC") && id.len() == 24 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -296,6 +300,33 @@ impl Store {
         true
     }
 
+    /// Puts the video on playlist `index`, or takes it off. Returns whether it is on it now.
+    fn toggle_in_list(&mut self, index: usize, item: VideoItem) -> bool {
+        let Some((_, items)) = self.lists.get_mut(index) else { return false };
+        if let Some(i) = items.iter().position(|v| v.id == item.id) {
+            items.remove(i);
+            return false;
+        }
+        if items.len() >= MAX_LIST_ITEMS {
+            return false;
+        }
+        items.push(item);
+        true
+    }
+
+    /// Videos started but not finished, newest first: (video, seconds watched).
+    fn unfinished(&self, max: usize) -> Vec<(VideoItem, u64)> {
+        self.history
+            .iter()
+            .filter_map(|v| {
+                let at = self.position(&v.id);
+                let open = at >= 15 && v.duration_secs.is_none_or(|d| at + 30 < d);
+                open.then(|| (v.clone(), at))
+            })
+            .take(max)
+            .collect()
+    }
+
     fn add_history(&mut self, item: VideoItem) {
         self.history.retain(|v| v.id != item.id);
         self.history.insert(0, item);
@@ -323,6 +354,7 @@ impl Store {
             "history": self.history.iter().map(item_to_json).collect::<Vec<_>>(),
             "positions": self.positions.iter().map(|(v, s)| serde_json::json!([v, s])).collect::<Vec<_>>(),
             "subs": self.subs.iter().map(|(id, name)| serde_json::json!([id, name])).collect::<Vec<_>>(),
+            "lists": self.lists.iter().map(|(n, items)| serde_json::json!({"name": n, "items": items.iter().map(item_to_json).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "prefs": {"autonext": self.prefs.autonext, "loop": self.prefs.looping, "captions": self.prefs.captions},
         })
         .to_string()
@@ -362,6 +394,20 @@ impl Store {
                             valid_channel_id(id).then(|| (id.to_string(), clean(p.get(1).and_then(|n| n.as_str()).unwrap_or(""), 120)))
                         })
                         .take(MAX_SUBS)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            lists: v
+                .get("lists")
+                .and_then(|l| l.as_array())
+                .map(|l| {
+                    l.iter()
+                        .filter_map(|p| {
+                            let name = clean(p.get("name")?.as_str()?, 60);
+                            let items = p.get("items")?.as_array()?.iter().filter_map(item_from_json).take(MAX_LIST_ITEMS).collect();
+                            (!name.is_empty()).then_some((name, items))
+                        })
+                        .take(MAX_LISTS)
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -472,6 +518,66 @@ fn store_command(value: &str) -> String {
             None => String::new(),
         };
     }
+    if let Some(rest) = value.strip_prefix("pl:") {
+        let (verb, arg) = rest.split_once(':').unwrap_or((rest, ""));
+        return match verb {
+            // pl:get:<video id> -> the lists, and whether the video is on each
+            "get" => with_store(
+                |s| {
+                    serde_json::Value::Array(
+                        s.lists
+                            .iter()
+                            .map(|(n, items)| serde_json::json!({"n": n, "h": items.iter().any(|v| v.id == arg)}))
+                            .collect(),
+                    )
+                    .to_string()
+                },
+                false,
+            ),
+            // pl:new:<name> -> its number
+            "new" => {
+                let name = clean(arg, 60);
+                if name.is_empty() {
+                    return String::new();
+                }
+                with_store(
+                    |s| {
+                        if let Some(i) = s.lists.iter().position(|(n, _)| *n == name) {
+                            return i.to_string();
+                        }
+                        if s.lists.len() >= MAX_LISTS {
+                            return String::new();
+                        }
+                        s.lists.push((name, Vec::new()));
+                        (s.lists.len() - 1).to_string()
+                    },
+                    true,
+                )
+            },
+            // pl:tog:<list number>:<video as JSON>
+            "tog" => {
+                let Some((index, json)) = arg.split_once(':') else { return String::new() };
+                match (index.parse::<usize>(), serde_json::from_str(json).ok().as_ref().and_then(item_from_json)) {
+                    (Ok(i), Some(item)) => if with_store(|s| s.toggle_in_list(i, item), true) { "1" } else { "0" }.into(),
+                    _ => String::new(),
+                }
+            },
+            // pl:rm:<list number>:<video id>
+            "rm" => {
+                if let Some((index, id)) = arg.split_once(':') && let Ok(i) = index.parse::<usize>() {
+                    with_store(|s| if let Some((_, items)) = s.lists.get_mut(i) { items.retain(|v| v.id != id) }, true);
+                }
+                String::new()
+            },
+            "del" => {
+                if let Ok(i) = arg.parse::<usize>() {
+                    with_store(|s| if i < s.lists.len() { s.lists.remove(i); }, true);
+                }
+                String::new()
+            },
+            _ => String::new(),
+        };
+    }
     if let Some(rest) = value.strip_prefix("hist:") {
         if let Some(item) = serde_json::from_str(rest).ok().as_ref().and_then(item_from_json) {
             with_store(|s| s.add_history(item), true);
@@ -517,7 +623,7 @@ pub(crate) fn player_memory(value: &str) -> String {
         }
         return if ok { "1" } else { "0" }.into();
     }
-    if value.starts_with("later:") || value.starts_with("hist:") || value.starts_with("pos:") || value.starts_with("clear:") {
+    if value.starts_with("later:") || value.starts_with("pl:") || value.starts_with("hist:") || value.starts_with("pos:") || value.starts_with("clear:") {
         return store_command(value);
     }
     let Some(file) = player_dir().map(|d| d.join("volume.txt")) else { return String::new() };
@@ -677,6 +783,9 @@ a.vid:hover .vt{color:var(--gold)}
 .sec{display:flex;align-items:center;gap:12px;margin:26px 0 12px}
 .sec h2{margin:0}
 .sc{position:relative}
+.prog{height:3px;border-radius:2px;background:rgba(255,255,255,.14);margin-top:5px;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--gold)}
+.plm .qi.mk{color:var(--gold)}
 .rmv{position:absolute;top:6px;left:6px;z-index:2;width:26px;height:26px;border-radius:50%;border:0;background:rgba(0,0,0,.72);color:#fff;font-size:16px;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s}
 .sc:hover .rmv{opacity:1}
 #rs{margin:8px 0;display:flex;gap:8px;align-items:center}
@@ -727,6 +836,9 @@ fn page_with(title: &str, query: &str, focus: bool, body: &str, refresh: bool) -
     let suggest = streamproxy::global()
         .map(|proxy| format!("<script>var SUG='{}';{SUGGEST_JS}</script>", proxy.suggest_url()))
         .unwrap_or_default();
+    let changed = innertube::changed_notice()
+        .map(|t| format!("<div class=\"card\" style=\"margin:0 0 14px;border-color:var(--gold)\"><div class=\"err\">{}</div></div>", esc(&t)))
+        .unwrap_or_default();
     let reload = if refresh {
         "<script>setTimeout(function(){location.reload()},350)</script>"
     } else {
@@ -741,7 +853,7 @@ fn page_with(title: &str, query: &str, focus: bool, body: &str, refresh: bool) -
          <input name=\"search_query\" value=\"{}\" placeholder=\"Search YouTube\"{}>\
          <button type=\"submit\">Search</button></form>\
          <a class=\"plain\" href=\"https://music.youtube.com/\">Music</a></header>\
-         <main>{body}</main>{suggest}<script>{LAZY_JS}</script>{reload}</body></html>",
+         <main>{changed}{body}</main>{suggest}<script>{LAZY_JS}</script>{reload}</body></html>",
         esc(title),
         esc(query),
         if focus { " autofocus" } else { "" }
@@ -1126,13 +1238,65 @@ fn subscriptions_section(count: usize, plume: &str) -> String {
     )
 }
 
+/// "Continue watching": started videos with a bar showing how far you got.
+fn continue_section(items: &[(VideoItem, u64)]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let cards: String = items
+        .iter()
+        .map(|(item, at)| {
+            let bar = item
+                .duration_secs
+                .map(|d| format!("<div class=\"prog\"><i style=\"width:{}%\"></i></div>", (at * 100 / d.max(1)).min(100)))
+                .unwrap_or_default();
+            format!(
+                "<div class=\"sc\"><button type=\"button\" class=\"rmv\" title=\"Not watching this\" data-resume=\"{}\">&times;</button>{}{bar}</div>",
+                esc(&item.id),
+                card(item)
+            )
+        })
+        .collect();
+    format!("<div class=\"sec\" id=\"s-cont\"><h2>Continue watching</h2></div><div class=\"grid\" id=\"g-cont\">{cards}</div>")
+}
+
+/// The playlists made by hand.
+fn lists_section(lists: &[(String, Vec<VideoItem>)]) -> String {
+    lists
+        .iter()
+        .enumerate()
+        .map(|(n, (name, items))| {
+            let cards: String = items
+                .iter()
+                .take(48)
+                .map(|item| {
+                    format!(
+                        "<div class=\"sc\"><button type=\"button\" class=\"rmv\" title=\"Take off this playlist\" data-list=\"{n}\" data-id=\"{}\">&times;</button>{}</div>",
+                        esc(&item.id),
+                        card(item)
+                    )
+                })
+                .collect();
+            let empty = if items.is_empty() { "<p class=\"meta\">Empty. Use Add to playlist on a video.</p>" } else { "" };
+            format!(
+                "<div class=\"sec\" id=\"s-pl{n}\"><h2>{}</h2><button type=\"button\" class=\"qbtn\" data-delist=\"{n}\">Delete playlist</button></div>\
+                 {empty}<div class=\"grid\" id=\"g-pl{n}\">{cards}</div>",
+                esc(name)
+            )
+        })
+        .collect()
+}
+
 fn home_html() -> String {
-    let (later, history, subs) = with_store(|s| (s.later.clone(), s.history.clone(), s.subs.len()), false);
+    let (later, history, subs, lists, unfinished) =
+        with_store(|s| (s.later.clone(), s.history.clone(), s.subs.len(), s.lists.clone(), s.unfinished(12)), false);
     let memory = streamproxy::global().map(|p| p.memory_url()).unwrap_or_default();
     let plume = streamproxy::global().map(|p| p.plume_url()).unwrap_or_default();
     let sections = format!(
-        "{}{}{}",
+        "{}{}{}{}{}",
+        continue_section(&unfinished),
         subscriptions_section(subs, &plume),
+        lists_section(&lists),
         saved_section("Watch later", "later", &later),
         saved_section("Recently watched", "history", &history)
     );
@@ -1144,7 +1308,11 @@ fn home_html() -> String {
              document.addEventListener('click',function(e){{var t=e.target;\
              if(t.getAttribute&&t.getAttribute('data-clear')){{var k=t.getAttribute('data-clear');mem('clear:'+k);\
              var a=document.getElementById('s-'+k),b=document.getElementById('g-'+k);if(a)a.remove();if(b)b.remove();}}\
-             else if(t.className==='rmv'){{e.preventDefault();e.stopPropagation();mem('later:rm:'+t.getAttribute('data-id'));t.parentNode.remove();}}}},true);}})();</script>"
+             else if(t.getAttribute&&t.getAttribute('data-delist')){{mem('pl:del:'+t.getAttribute('data-delist'));location.reload();}}\
+             else if(t.className==='rmv'){{e.preventDefault();e.stopPropagation();\
+             if(t.getAttribute('data-resume'))mem('pos:'+t.getAttribute('data-resume')+',0');\
+             else if(t.getAttribute('data-list')!==null)mem('pl:rm:'+t.getAttribute('data-list')+':'+t.getAttribute('data-id'));\
+             else mem('later:rm:'+t.getAttribute('data-id'));t.parentNode.remove();}}}},true);}})();</script>"
         )
     };
     page_with(
@@ -1168,6 +1336,8 @@ pub(crate) struct Choice {
     pub url: String,
     /// The first couple of minutes only (ready much sooner); the same as `url` for short videos.
     pub part: String,
+    /// The first ten minutes (for long videos; empty otherwise).
+    pub mid: String,
     /// `<token>_<itag>`, used to ask the helper whether the whole file is ready.
     pub key: String,
     pub height: u32,
@@ -1309,8 +1479,9 @@ function hook(v){
   v.addEventListener('playing',function(){size();note('playing '+v.videoWidth+'x'+v.videoHeight+' as '+opt().text);},{once:true});
   v.addEventListener('pteron-seek',function(x){
     if(!part)return;
-    want=x.detail;var o=opt(),my=++gen;say('Loading the rest of the video...');
-    waitFull(o,my,function(){say('');swap(o.value,my,true);});
+    want=x.detail;var o=opt(),my=++gen,viaM=!!midOf(o)&&want<540;say('Loading the rest of the video...');
+    if(viaM)viaMid(o,my,true,function(){say('');});
+    waitFull(o,my,function(){say('');swap(o.value,my,!viaM);});
   });
   v.addEventListener('ended',function(){
     var o=opt();
@@ -1322,22 +1493,34 @@ function hook(v){
   clearTimeout(slow);
   slow=setTimeout(function(){if(v.readyState<3&&!v.error)say('This is taking a long time. If it does not start, choose a lower quality: this connection or computer may be too slow for '+opt().text+'.');},15000);
 }
-function swap(src,my,forcePlay){
+function swap(src,my,forcePlay,stay){
   // Same video element (so its controls, volume and listeners stay): new source, same spot.
   var v=cur();if(!v||my!==gen)return;
   var t=want!==null?want:(v.currentTime||0),playing=forcePlay||!v.paused;
-  want=null;part=false;v.removeAttribute('data-partial');
+  want=null;if(!stay){part=false;v.removeAttribute('data-partial');}
   v.addEventListener('loadedmetadata',function f(){
     v.removeEventListener('loadedmetadata',f);
+    var go=function(){if(!playing)return;try{v.pause();}catch(x){}var p=v.play();if(p&&p.catch)p.catch(function(){});};
+    // After the new file is in place and the spot is restored, give playback a clean restart:
+    // the engine can otherwise sit there 'playing' without moving (the freeze people saw).
+    if(t>0.05){v.addEventListener('seeked',function s(){v.removeEventListener('seeked',s);setTimeout(go,60);});}
     try{if(t>0.05)v.currentTime=t;}catch(x){}
-    if(playing){var p=v.play();if(p&&p.catch)p.catch(function(){});}
+    if(!(t>0.05))go();
   });
   v.src=src;
+}
+function midOf(o){return o.getAttribute('data-m');}
+// Waits for the ten-minute file, then plays that (same spot) while the whole one is still being made.
+function viaMid(o,my,play,after){
+  var mk=o.getAttribute('data-k')+'m';
+  (function poll(){if(my!==gen||!part)return;ask(mk,function(ok){if(my!==gen||!part)return;if(!ok){setTimeout(poll,500);return;}swap(midOf(o),my,play,true);if(after)after();});})();
 }
 function upgrade(my){
   var o=opt();
   if(whole(o)){part=false;return;}
   part=true;
+  // Long videos: a ten-minute file first (ready soon after the quick part), then the whole one.
+  if(midOf(o))viaMid(o,my,false);
   waitFull(o,my,function(){swap(o.value,my,false);});
 }
 q.onchange=function(){
@@ -1407,6 +1590,16 @@ var wl=document.getElementById('wl');
 function wlPaint(on){wl.textContent=on?'Saved \u2713':'Watch later';}
 wl.onclick=function(){mem('later:'+JSON.stringify(VID),function(r){wlPaint(r==='1');});};
 mem('later:has:'+VID.id,function(r){wlPaint(r==='1');});
+var plb=document.getElementById('plb'),plm=document.getElementById('plm');
+function plRow(txt,cls,fn){var d=document.createElement('div');d.className='qi'+(cls?' '+cls:'');d.textContent=txt;d.onclick=function(x){x.stopPropagation();fn(d);};plm.appendChild(d);return d;}
+function plOpen(){mem('pl:get:'+VID.id,function(t){var a=[];try{a=JSON.parse(t)||[];}catch(e){}plm.innerHTML='';
+  a.forEach(function(l,i){plRow((l.h?'\u2713 ':'')+l.n,'',function(d){mem('pl:tog:'+i+':'+JSON.stringify(VID),function(r){if(r===''){return;}var on=r==='1';d.textContent=(on?'\u2713 ':'')+l.n;l.h=on;plb.textContent=on?'On a playlist \u2713':'Add to playlist';});});});
+  plRow('+ New playlist...','mk',function(){plm.innerHTML='';var f=document.createElement('input');f.type='text';f.maxLength=60;f.placeholder='Name, then Enter';f.style.cssText='margin:4px;padding:6px 8px;border-radius:7px;border:1px solid var(--bd);background:var(--bg);color:var(--fg)';
+    f.onclick=function(x){x.stopPropagation();};f.onkeydown=function(x){x.stopPropagation();if(x.key==='Enter'&&f.value.trim()){mem('pl:new:'+f.value.trim(),function(n){if(n!==''){mem('pl:tog:'+n+':'+JSON.stringify(VID),function(){plm.style.display='none';plb.textContent='On a playlist \u2713';});}});}else if(x.key==='Escape'){plm.style.display='none';}};
+    plm.appendChild(f);f.focus();});
+  plm.style.display='block';});}
+plb.onclick=function(x){x.stopPropagation();qm.style.display='none';sm.style.display='none';if(plm.style.display==='block'){plm.style.display='none';}else{plOpen();}};
+document.addEventListener('click',function(){plm.style.display='none';});
 function dlButton(id,kind,url){
   var b=document.getElementById(id),old=b.textContent;
   b.onclick=function(){
@@ -1462,10 +1655,11 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice]) -> St
         .enumerate()
         .map(|(index, choice)| {
             format!(
-                "<option value=\"{}\" data-p=\"{}\" data-k=\"{}\"{}>{}</option>",
+                "<option value=\"{}\" data-p=\"{}\" data-k=\"{}\"{}{}>{}</option>",
                 esc(&choice.url),
                 esc(&choice.part),
                 esc(&choice.key),
+                if choice.mid.is_empty() { String::new() } else { format!(" data-m=\"{}\"", esc(&choice.mid)) },
                 if index == start { " selected" } else { "" },
                 esc(&choice.label)
             )
@@ -1585,7 +1779,8 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice]) -> St
          <div class=\"row\">{author}{subscribe}<span class=\"meta\">{}</span><span class=\"sp\"></span>\
          <button type=\"button\" id=\"dv\" class=\"qbtn\" title=\"Save this video (.mp4) to your Downloads folder\">Download video</button>\
          <button type=\"button\" id=\"da\" class=\"qbtn\" title=\"Save only the sound as an MP3 in your Downloads folder\">Download MP3</button>\
-         <button type=\"button\" id=\"wl\" class=\"qbtn\">Watch later</button><button type=\"button\" id=\"th\" class=\"qbtn\">Theater</button>\
+         <button type=\"button\" id=\"wl\" class=\"qbtn\">Watch later</button>\
+         <span class=\"qwrap\"><button type=\"button\" id=\"plb\" class=\"qbtn\">Add to playlist</button><div id=\"plm\" class=\"qmenu plm\" style=\"display:none\"></div></span><button type=\"button\" id=\"th\" class=\"qbtn\">Theater</button>\
          <button type=\"button\" id=\"lp\" class=\"qbtn\" title=\"Play this video again and again\">Loop</button>\
          <button type=\"button\" id=\"an\" class=\"qbtn\" title=\"When the video ends, play the first one in Up next\">Autoplay next</button>\
          <div class=\"pick qwrap\"><span id=\"res\" class=\"meta\"></span><span>Speed</span><button type=\"button\" id=\"sb\" class=\"qbtn\"></button>\
@@ -1629,6 +1824,11 @@ fn video_page(id: &str) -> String {
             label: if video.fps > 30 { format!("{}p{}", video.height, video.fps) } else { format!("{}p", video.height) },
             url: proxy.url(&token, video.itag),
             part: if long { proxy.partial_url(&token, video.itag) } else { proxy.url(&token, video.itag) },
+            mid: if long && info.set.duration_ms as f64 / 1000.0 > streamproxy::MID_SECS + 120.0 {
+                proxy.mid_url(&token, video.itag)
+            } else {
+                String::new()
+            },
             key: format!("{token}_{}", video.itag),
             height: video.height,
             fps: video.fps,
@@ -1775,6 +1975,36 @@ mod tests {
 
     fn video(id: &str) -> Option<Action> {
         Some(Action::Open(Request::Video(id.into())))
+    }
+
+    #[test]
+    fn playlists_and_continue_watching() {
+        let item = |id: &str, d: u64| VideoItem {
+            id: id.into(), title: "T".into(), channel: "C".into(), duration_secs: Some(d), views: String::new(), published: String::new(),
+        };
+        let mut s = Store::default();
+        s.lists.push(("Mix".into(), Vec::new()));
+        assert!(s.toggle_in_list(0, item("aaaaaaaaaaa", 60)));
+        assert!(!s.toggle_in_list(0, item("aaaaaaaaaaa", 60)));
+        assert!(!s.toggle_in_list(5, item("aaaaaaaaaaa", 60)), "no such list");
+        assert!(s.toggle_in_list(0, item("bbbbbbbbbbb", 60)));
+        let again = Store::from_json(&s.to_json());
+        assert_eq!(again.lists.len(), 1);
+        assert_eq!(again.lists[0].0, "Mix");
+        assert_eq!(again.lists[0].1[0].id, "bbbbbbbbbbb");
+        // started, finished, never started
+        for (id, dur, at) in [("ccccccccccc", 600, 300), ("ddddddddddd", 600, 590), ("eeeeeeeeeee", 600, 5)] {
+            s.add_history(item(id, dur));
+            s.set_position(id, at);
+        }
+        let open = s.unfinished(10);
+        assert_eq!(open.len(), 1);
+        assert_eq!((open[0].0.id.as_str(), open[0].1), ("ccccccccccc", 300));
+        let html = continue_section(&open);
+        assert!(html.contains("width:50%") && html.contains("data-resume=\"ccccccccccc\""));
+        assert_eq!(continue_section(&[]), "");
+        let lists = lists_section(&[("<b>x</b>".into(), vec![item("aaaaaaaaaaa", 60)])]);
+        assert!(lists.contains("&lt;b&gt;x") && lists.contains("data-delist=\"0\"") && lists.contains("data-list=\"0\""));
     }
 
     #[test]
@@ -1938,6 +2168,7 @@ mod tests {
                 label: format!("{h}p"),
                 url: format!("http://127.0.0.1:9/v/t/{h}.mp4"),
                 part: format!("http://127.0.0.1:9/v/t/{h}p.mp4"),
+                mid: String::new(),
                 key: format!("t_{h}"),
                 height: *h,
                 fps: 30,
@@ -1980,12 +2211,12 @@ mod tests {
     #[test]
     fn starts_at_720p() {
         assert_eq!(default_index(&choices()), 1);
-        let only_high = vec![Choice { label: "1080p".into(), url: "u".into(), part: "u".into(), key: "k".into(), height: 1080, fps: 30 }];
+        let only_high = vec![Choice { label: "1080p".into(), url: "u".into(), part: "u".into(), mid: String::new(), key: "k".into(), height: 1080, fps: 30 }];
         assert_eq!(default_index(&only_high), 0);
         let sixty = vec![
-            Choice { label: "1080p60".into(), url: "u".into(), part: "u".into(), key: "k1".into(), height: 1080, fps: 60 },
-            Choice { label: "720p60".into(), url: "u".into(), part: "u".into(), key: "k2".into(), height: 720, fps: 60 },
-            Choice { label: "720p".into(), url: "u".into(), part: "u".into(), key: "k3".into(), height: 720, fps: 30 },
+            Choice { label: "1080p60".into(), url: "u".into(), part: "u".into(), mid: String::new(), key: "k1".into(), height: 1080, fps: 60 },
+            Choice { label: "720p60".into(), url: "u".into(), part: "u".into(), mid: String::new(), key: "k2".into(), height: 720, fps: 60 },
+            Choice { label: "720p".into(), url: "u".into(), part: "u".into(), mid: String::new(), key: "k3".into(), height: 720, fps: 30 },
         ];
         assert_eq!(default_index(&sixty), 1);
     }

@@ -32,6 +32,42 @@ const CHANNEL_VIDEOS_PARAMS: &str = "EgZ2aWRlb3PyBgQKAjoA";
 const TV_VERSION: &str = "7.20260707.07.00";
 const TV_UA: &str = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)";
 
+// ---------------------------------------------------------------- noticing that YouTube changed
+//
+// YouTube changes how it answers from time to time. When an answer is valid but lacks what Plume
+// reads, that is remembered; after two such surprises within half an hour Plume says so on its
+// pages (instead of only showing a confusing error), and the notes file keeps what happened.
+
+static CHANGED: std::sync::Mutex<Vec<(&'static str, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+const CHANGED_WINDOW: std::time::Duration = std::time::Duration::from_secs(1800);
+
+pub(crate) fn note_changed(what: &'static str) {
+    crate::crashlog::note(&format!("youtube answer looks different from what Plume expects: {what}"));
+    let mut list = CHANGED.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|(_, t)| t.elapsed() < CHANGED_WINDOW);
+    list.push((what, std::time::Instant::now()));
+}
+
+/// A line for the top of Plume's pages while YouTube seems to have changed something.
+pub(crate) fn changed_notice() -> Option<String> {
+    let mut list = CHANGED.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|(_, t)| t.elapsed() < CHANGED_WINDOW);
+    (list.len() >= 2).then(|| {
+        let mut what: Vec<&str> = list.iter().map(|(w, _)| *w).collect();
+        what.dedup();
+        format!(
+            "YouTube seems to have changed something Plume relies on ({}). Check for a Pteron update; \
+             until then some videos or lists may not load. The details are in Pteron's notes file.",
+            what.join(", ")
+        )
+    })
+}
+
+/// A search answer with neither results nor any of the usual containers (even an empty search has them).
+fn search_shape_changed(answer: &Value, found: usize) -> bool {
+    found == 0 && answer.get("contents").is_none() && answer.get("onResponseReceivedCommands").is_none()
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Client {
     Visionos,
@@ -75,7 +111,23 @@ fn post(endpoint: &str, body: Value, client: Client) -> Result<Value, String> {
 
 /// `visitor` is the visitor id of a browsing session; YouTube is much less likely to ask for
 /// a bot check when requests carry one.
-fn post_with(endpoint: &str, mut body: Value, client: Client, visitor: Option<&str>) -> Result<Value, String> {
+fn post_with(endpoint: &str, body: Value, client: Client, visitor: Option<&str>) -> Result<Value, String> {
+    let answer = post_raw(endpoint, body, client, visitor)?;
+    record_answer(endpoint, &answer);
+    Ok(answer)
+}
+
+/// With `PTERON_RECORD_DIR` set, every answer is saved there as `<endpoint>-<number>.json`, so a
+/// real one can be copied into `pteron_ci/fixtures` for the tests.
+fn record_answer(endpoint: &str, answer: &Value) {
+    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Some(dir) = std::env::var_os("PTERON_RECORD_DIR") else { return };
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{endpoint}-{n}.json")), answer.to_string());
+}
+
+fn post_raw(endpoint: &str, mut body: Value, client: Client, visitor: Option<&str>) -> Result<Value, String> {
     body["context"] = context(client);
     if let Some(visitor) = visitor {
         body["context"]["client"]["visitorData"] = json!(visitor);
@@ -87,6 +139,28 @@ fn post_with(endpoint: &str, mut body: Value, client: Client, visitor: Option<&s
         Client::Tv => ("7", TV_VERSION, TV_UA),
         Client::AndroidVr => ("28", ANDROID_VR_VERSION, ANDROID_VR_UA),
     };
+    let name_header = name_header.to_string();
+    let version = version.to_string();
+    let url = format!("https://www.youtube.com/youtubei/v1/{endpoint}?prettyPrint=false");
+    let mut headers = vec![
+        ("content-type", "application/json"),
+        ("x-youtube-client-name", name_header.as_str()),
+        ("x-youtube-client-version", version.as_str()),
+        ("origin", "https://www.youtube.com"),
+        ("user-agent", ua),
+    ];
+    if let Some(visitor) = visitor {
+        headers.push(("x-goog-visitor-id", visitor));
+    }
+    let mut request = crate::httpc::Request::get(&url, std::time::Duration::from_secs(25));
+    (request.method, request.headers, request.body, request.max_body) =
+        ("POST", &headers, Some(body.to_string().into_bytes()), 16_000_000);
+    if let Ok(reply) = crate::httpc::send(&request) {
+        if !reply.body.is_empty() {
+            return serde_json::from_slice(&reply.body).map_err(|e| format!("Unreadable answer from YouTube: {e}"));
+        }
+        return Err(format!("Could not reach YouTube: HTTP {}", reply.status));
+    }
     let mut command = curl_command();
     command
         .args(["-sS", "--fail-with-body", "--proto", "=https", "--max-time", "25", "-X", "POST"])
@@ -237,6 +311,18 @@ pub(crate) fn parse_captions(v: &Value) -> Vec<Caption> {
 /// A small text file from YouTube or a helper service, over https only (subtitles, feeds,
 /// lyrics, sponsor segments). At most 4 MB.
 pub(crate) fn get_text(url: &str) -> Result<String, String> {
+    if url.starts_with("https://") {
+        let headers = [("user-agent", WEB_UA), ("accept-language", "en")];
+        let mut request = crate::httpc::Request::get(url, std::time::Duration::from_secs(20));
+        (request.headers, request.follow) = (&headers, true);
+        if let Ok(reply) = crate::httpc::send(&request) {
+            return if (200..300).contains(&reply.status) {
+                String::from_utf8(reply.body).map_err(|_| "The answer was not text.".to_string())
+            } else {
+                Err(format!("The requested URL returned error: {}", reply.status))
+            };
+        }
+    }
     let out = curl_command()
         .args(["-sS", "--fail", "-L", "--proto", "=https", "--max-time", "20", "--max-filesize", "4000000"])
         .args(["-A", WEB_UA, "-H", "Accept-Language: en"])
@@ -255,6 +341,18 @@ pub(crate) fn get_text(url: &str) -> Result<String, String> {
 
 /// A small file over https (a cover picture): at most `max` bytes.
 pub(crate) fn get_bytes(url: &str, max: u64) -> Result<Vec<u8>, String> {
+    if url.starts_with("https://") {
+        let headers = [("user-agent", WEB_UA)];
+        let mut request = crate::httpc::Request::get(url, std::time::Duration::from_secs(15));
+        (request.headers, request.follow, request.max_body) = (&headers, true, max as usize + 1);
+        if let Ok(reply) = crate::httpc::send(&request) {
+            return if (200..300).contains(&reply.status) && reply.body.len() as u64 <= max {
+                Ok(reply.body)
+            } else {
+                Err("download failed".into())
+            };
+        }
+    }
     let out = curl_command()
         .args(["-sS", "--fail", "-L", "--proto", "=https", "--max-time", "15", "--max-filesize", &max.to_string()])
         .args(["-A", WEB_UA])
@@ -353,7 +451,10 @@ pub(crate) fn parse_player(v: &Value) -> Result<PlayerInfo, String> {
     let formats = v
         .pointer("/streamingData/adaptiveFormats")
         .and_then(|f| f.as_array())
-        .ok_or("YouTube did not return any streams for this video.")?;
+        .ok_or_else(|| {
+            note_changed("video streams");
+            "YouTube did not return any streams for this video.".to_string()
+        })?;
 
     let mut videos: Vec<(StreamInfo, u64)> = Vec::new();
     let mut audios: Vec<(StreamInfo, u64)> = Vec::new();
@@ -396,8 +497,12 @@ pub(crate) fn parse_player(v: &Value) -> Result<PlayerInfo, String> {
         .into_iter()
         .max_by_key(|(info, bitrate)| (*bitrate, info.itag == 140))
         .map(|(info, _)| info)
-        .ok_or("YouTube did not offer a compatible audio stream for this video.")?;
+        .ok_or_else(|| {
+            note_changed("audio streams");
+            "YouTube did not offer a compatible audio stream for this video.".to_string()
+        })?;
     if videos.is_empty() {
+        note_changed("video streams");
         return Err("YouTube did not offer a compatible video stream for this video.".into());
     }
     let length_secs = details
@@ -668,7 +773,12 @@ pub(crate) fn search(query: &str, params: &str) -> Result<(Vec<VideoItem>, Optio
         json!({"query": query, "params": params})
     };
     let answer = post("search", body, Client::Web)?;
-    Ok((parse_videos(&answer, 40), continuation_token(&answer)))
+    let items = parse_videos(&answer, 40);
+    if search_shape_changed(&answer, items.len()) {
+        note_changed("search results");
+        return Err("YouTube answered the search in a form this version of Pteron does not understand.".into());
+    }
+    Ok((items, continuation_token(&answer)))
 }
 
 /// The next batch of search results.
@@ -1058,6 +1168,40 @@ mod tests {
                 {"itag": 160, "mimeType": "video/mp4; codecs=\"avc1.4D400C\"", "height": 144}
             ]}
         })
+    }
+
+    #[test]
+    fn fixtures_parse() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+        let Ok(files) = std::fs::read_dir(&dir) else { return };
+        let mut seen = 0;
+        for file in files.flatten() {
+            let name = file.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let answer: Value = serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+            seen += 1;
+            if name.starts_with("player-no-") {
+                assert!(parse_player(&answer).is_err(), "{name} should be refused");
+            } else if name.starts_with("player-") {
+                assert!(parse_player(&answer).is_ok(), "{name} should parse");
+            } else if name == "search-changed.json" {
+                assert!(search_shape_changed(&answer, parse_videos(&answer, 40).len()), "{name} should look changed");
+            } else {
+                let found = parse_videos(&answer, 40);
+                assert!(!found.is_empty() && !search_shape_changed(&answer, found.len()), "{name} should have videos");
+            }
+        }
+        assert!(seen >= 4, "fixtures are missing");
+    }
+
+    #[test]
+    fn notices_a_changed_youtube_after_two_surprises() {
+        assert!(!search_shape_changed(&json!({"contents": {}}), 0));
+        note_changed("test one");
+        note_changed("test two");
+        assert!(changed_notice().is_some_and(|t| t.contains("Check for a Pteron update")));
     }
 
     #[test]

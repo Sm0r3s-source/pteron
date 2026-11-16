@@ -18,6 +18,19 @@ fn is_tracking(name: &str) -> bool {
     name.starts_with("utm_") || NAMES.contains(&name.as_str())
 }
 
+/// A Google result link (`google.com/url?q=<address>`) opens the address itself, one request
+/// fewer through Google. The newer `/goto?url=` links carry a token Google alone can read, so
+/// those are left alone.
+pub(crate) fn unwrap_google_link(url: &Url) -> Option<Url> {
+    let host = url.host_str()?;
+    if !(host == "google.com" || host.ends_with(".google.com")) || url.path() != "/url" {
+        return None;
+    }
+    let target = url.query_pairs().find(|(k, _)| k == "q" || k == "url").map(|(_, v)| v.into_owned())?;
+    let target = Url::parse(&target).ok()?;
+    matches!(target.scheme(), "http" | "https").then_some(target)
+}
+
 /// The address without tracking parts, or `None` when there was nothing to remove.
 /// Only web addresses are touched; the other query parts are kept exactly as they were.
 pub(crate) fn strip_tracking(url: &Url) -> Option<Url> {
@@ -87,6 +100,18 @@ pub(crate) fn blocks_private_request(target: &Url, page: Option<&Url>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn google_result_links_open_the_real_address() {
+        let u = |t: &str| Url::parse(t).unwrap();
+        assert_eq!(
+            unwrap_google_link(&u("https://www.google.com/url?sa=t&q=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1&ved=x")),
+            Some(u("https://example.com/a?b=1"))
+        );
+        assert_eq!(unwrap_google_link(&u("https://www.google.com/url?q=javascript:alert(1)")), None);
+        assert_eq!(unwrap_google_link(&u("https://www.google.com/goto?url=CAESabc")), None);
+        assert_eq!(unwrap_google_link(&u("https://evil.example/url?q=https://example.com")), None);
+    }
+
     use super::*;
 
     fn clean(url: &str) -> Option<String> {

@@ -2,6 +2,8 @@
 // Only the modules that do not need Servo itself.
 #[path = "../../ports/servoshell/innertube.rs"]
 mod innertube;
+#[path = "../../ports/servoshell/httpc.rs"]
+mod httpc;
 #[path = "../../ports/servoshell/streamproxy.rs"]
 mod streamproxy;
 #[path = "../../ports/servoshell/mp4mux.rs"]

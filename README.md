@@ -63,6 +63,9 @@ wrong or do not work (see [Known problems](#known-problems)). Read [Before you i
 - **Loop**, **Autoplay next**, and **Audio only** in the quality list
 - **SponsorBlock** (off by default; Settings, Video): sponsor segments, self-promotion and subscribe
   reminders are skipped, with an Undo button, and shown on the seek bar
+- **Continue watching** row on the Plume home page, and **playlists** you make yourself (Add to playlist on a video)
+- Faster, steadier Plume: one shared connection to YouTube instead of a new curl process per request; long videos start from a quick first part, then a ten-minute file, then the whole video
+- Plume says so when YouTube seems to have changed something it relies on
 - Plume Music for listening, with queues, playlists and liked songs
 - Plume Music **Radio** (when the queue ends, songs like the last one keep playing), a **sleep timer**
   (15, 30 or 60 minutes, fading out), and **time-synced lyrics** from lrclib.net (off by default)
@@ -308,6 +311,7 @@ New files are in `ports/servoshell/`. Some of the main ones:
 |---|---|
 | `desktop/sidebar.rs`, `desktop/settings_page.rs` | The sidebar and the Settings page (egui) |
 | `youtube.rs`, `innertube.rs`, `streamproxy.rs`, `mp4mux.rs` | Plume: YouTube pages, API, local video helper, MP4 muxer |
+| `httpc.rs` | One shared HTTP client (kept connections, HTTP/2) for Plume; curl is the fallback |
 | `plume.rs` | Plume extras: up next, subscriptions and feeds, chapters, subtitles, SponsorBlock |
 | `music.rs`, `downloads.rs`, `mp3.rs` | Plume Music, downloads, MP3 conversion |
 | `adblock.rs`, `privacy.rs`, `secure.rs`, `passwords.rs` | Blocking, tracking removal, https, passwords |
