@@ -68,35 +68,35 @@ pub struct Gui {
     context: EguiGlow,
     toolbar_height: Length<f32, DeviceIndependentPixel>,
 
-    /// Pteron: Zen-style sidebar instead of the classic top toolbar.
+    /// Sirocco: Zen-style sidebar instead of the classic top toolbar.
     sidebar_mode: bool,
-    /// Pteron: the large East Asian fonts have been loaded into the interface.
+    /// Sirocco: the large East Asian fonts have been loaded into the interface.
     wide_fonts: bool,
     sidebar: sidebar::State,
-    /// Pteron: the panel open next to the Opera-style side bar.
+    /// Sirocco: the panel open next to the Opera-style side bar.
     rail: topbar::RailPanel,
-    /// Pteron: where the page is drawn, in egui points (everything else is interface).
+    /// Sirocco: where the page is drawn, in egui points (everything else is interface).
     page_rect: egui::Rect,
-    /// Pteron: egui's zoom for the screen's scale; the interface size setting multiplies it.
+    /// Sirocco: egui's zoom for the screen's scale; the interface size setting multiplies it.
     base_zoom: std::cell::Cell<f32>,
-    /// Pteron: the count of settings changes made outside the settings page that were picked up.
+    /// Sirocco: the count of settings changes made outside the settings page that were picked up.
     settings_seen: u64,
-    /// Pteron: the bar between the two pages of a split view (it belongs to the interface).
+    /// Sirocco: the bar between the two pages of a split view (it belongs to the interface).
     split_divider: Option<egui::Rect>,
-    /// Pteron: the window has Pteron's own top instead of the system's title bar (`None`
+    /// Sirocco: the window has Sirocco's own top instead of the system's title bar (`None`
     /// until the first frame has set it).
     own_titlebar: Option<bool>,
-    /// Pteron: the system took the mouse over to move the window, so the interface never sees
+    /// Sirocco: the system took the mouse over to move the window, so the interface never sees
     /// the button come up and has to be told.
     mouse_taken: bool,
-    /// Pteron: when a page went full screen, and which site (shown for a few seconds, since a
+    /// Sirocco: when a page went full screen, and which site (shown for a few seconds, since a
     /// full-screen page hides the address bar and could pretend to be anything).
     fullscreen_notice: Option<(f64, String)>,
     settings: pteron::Settings,
     settings_page: settings_page::PageState,
     /// The tab that was active last frame; switching tabs closes the settings page.
     last_active_tab: Option<WebViewId>,
-    /// Pteron: the system web engine views behind compatibility tabs.
+    /// Sirocco: the system web engine views behind compatibility tabs.
     compat_host: crate::compat_host::Host,
 
     location: String,
@@ -151,7 +151,7 @@ fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
             match fs::read(font_path) {
                 Ok(bytes) => {
                     if !fonts.font_data.contains_key(*font_name) {
-                        // Pteron: these files are 10 to 20 MB each. egui copies font bytes it
+                        // Sirocco: these files are 10 to 20 MB each. egui copies font bytes it
                         // owns, so they would be in memory twice; bytes that live for the whole
                         // run are shared instead. They are loaded once and never unloaded.
                         let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
@@ -169,7 +169,7 @@ fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
         }
     }
 
-    // Pteron: fallbacks behind the interface fonts; the last one loaded is tried first.
+    // Sirocco: fallbacks behind the interface fonts; the last one loaded is tried first.
     fonts
         .families
         .get_mut(&FontFamily::Proportional)
@@ -179,7 +179,7 @@ fn load_cjk_fonts(font_candidates: &[(&str, &str)]) -> FontDefinitions {
     fonts
 }
 
-/// Pteron: the fonts the interface starts with. The East Asian fonts used to draw all of its
+/// Sirocco: the fonts the interface starts with. The East Asian fonts used to draw all of its
 /// text, but they are tens of MB, so they now load only when something on screen needs them
 /// (see `shows_wide_text`). A small system font with the same look takes their place for
 /// everything else, so the interface looks the same before and after they load.
@@ -296,7 +296,7 @@ fn configure_fonts() -> FontDefinitions {
     ])
 }
 
-/// Pteron: Chinese, Japanese or Korean text, which egui's built-in fonts cannot draw.
+/// Sirocco: Chinese, Japanese or Korean text, which egui's built-in fonts cannot draw.
 fn is_wide(text: &str) -> bool {
     text.chars().any(|c| {
         matches!(
@@ -306,7 +306,7 @@ fn is_wide(text: &str) -> bool {
     })
 }
 
-/// Pteron: is any text drawn in this frame Chinese, Japanese or Korean? Looks at what egui
+/// Sirocco: is any text drawn in this frame Chinese, Japanese or Korean? Looks at what egui
 /// was asked to draw, so it covers the sidebar, settings, dialogs and messages alike.
 fn shows_wide_text(ctx: &egui::Context) -> bool {
     fn wide(shape: &egui::Shape) -> bool {
@@ -354,11 +354,11 @@ impl Gui {
             false,
         );
 
-        // Pteron: the East Asian fonts are large (tens of MB), so they are loaded only once
+        // Sirocco: the East Asian fonts are large (tens of MB), so they are loaded only once
         // something on screen needs them (see `shows_wide_text`).
         context.egui_ctx.set_fonts(interface_fonts());
         let sidebar_mode = std::env::var("PTERON_UI").map_or(true, |v| v != "classic");
-        // Pteron: timed frames wait for their time (see `window::repaint_after`).
+        // Sirocco: timed frames wait for their time (see `window::repaint_after`).
         context
             .egui_ctx
             .set_request_repaint_callback(|info| crate::window::repaint_after(info.delay));
@@ -485,7 +485,7 @@ impl Gui {
         position.y < self.toolbar_height.get()
     }
 
-    /// Pteron: with its own window top the window has no frame to resize it by, so the outer
+    /// Sirocco: with its own window top the window has no frame to resize it by, so the outer
     /// few points of the window do that. `position` is in screen points.
     pub(crate) fn resize_direction(
         &self,
@@ -517,17 +517,17 @@ impl Gui {
         })
     }
 
-    /// Pteron: true while the settings page is showing.
+    /// Sirocco: true while the settings page is showing.
     pub(crate) fn settings_open(&self) -> bool {
         self.settings_page.open
     }
 
-    /// Pteron: true when the Zen-style sidebar replaces the classic toolbar.
+    /// Sirocco: true when the Zen-style sidebar replaces the classic toolbar.
     pub(crate) fn sidebar_mode(&self) -> bool {
         self.sidebar_mode
     }
 
-    /// Pteron: open the sidebar and put the cursor in the address bar.
+    /// Sirocco: open the sidebar and put the cursor in the address bar.
     pub(crate) fn focus_location(&mut self) {
         self.sidebar.focus_location = true;
     }
@@ -591,10 +591,8 @@ impl Gui {
 
             let tab = tab_frame
                 .content_ui
-                .add(Button::selectable(
-                    active,
-                    truncate_with_ellipsis(&label, 20),
-                ))
+                // No frame: its interact rect is taller than the tab, so only the tab frame is filled.
+                .add(Button::selectable(active, truncate_with_ellipsis(&label, 20)).frame(false))
                 .on_hover_ui(|ui| {
                     ui.label(&label);
                 });
@@ -661,7 +659,7 @@ impl Gui {
         } = self;
 
         let winit_window = headed_window.winit_window();
-        // Pteron: the system moved the window with the mouse held down; the button is up now.
+        // Sirocco: the system moved the window with the mouse held down; the button is up now.
         if std::mem::take(mouse_taken) {
             let events = &mut context.egui_winit.egui_input_mut().events;
             events.push(egui::Event::PointerButton {
@@ -672,7 +670,7 @@ impl Gui {
             });
             events.push(egui::Event::PointerGone);
         }
-        // Pteron: its own window top instead of the system's title bar (a setting).
+        // Sirocco: its own window top instead of the system's title bar (a setting).
         let own = *sidebar_mode &&
             !settings.look.system_titlebar &&
             std::env::var_os("PTERON_SYSTEM_TITLEBAR").is_none();
@@ -685,20 +683,20 @@ impl Gui {
         context.run(winit_window, |ctx| {
             load_pending_favicons(ctx, window, favicon_textures);
 
-            // Pteron: settings changed elsewhere (the new tab page's shortcuts).
+            // Sirocco: settings changed elsewhere (the new tab page's shortcuts).
             let seen = pteron::outside_changes();
             if seen != *settings_seen {
                 *settings_seen = seen;
                 *settings = pteron::settings();
             }
-            // Pteron: the interface size.
+            // Sirocco: the interface size.
             let scale = if *sidebar_mode { settings.look.scale as f32 / 100.0 } else { 1.0 };
             let zoom = base_zoom.get() * scale;
             if (ctx.zoom_factor() - zoom).abs() > 0.001 {
                 ctx.set_zoom_factor(zoom);
             }
 
-            // Pteron: sites that switched to the compatibility tab by themselves are remembered.
+            // Sirocco: sites that switched to the compatibility tab by themselves are remembered.
             let keep = crate::compat_view::take_keep();
             if !keep.is_empty() {
                 settings.compat_tab_keep_sites.extend(keep);
@@ -716,7 +714,7 @@ impl Gui {
             // when not displaying the URL bar: https://github.com/servo/servo/issues/32443
             // Show toolbar unless fullscreen is from document (web API)
             if *sidebar_mode && !headed_window.is_fullscreen_from_document() {
-                // Pteron: the sidebar floats over the page, so the page keeps the full window.
+                // Sirocco: the sidebar floats over the page, so the page keeps the full window.
                 *toolbar_height = Length::default();
                 // A compatibility tab is a native view that egui cannot see the mouse over; the page
                 // reports it, so the sidebar can still open at the left edge and close again.
@@ -1130,7 +1128,7 @@ impl Gui {
                                         window.stop_loading();
                                     }
                                 },
-                                LoadStatus::Complete => {
+                                LoadStatus::Complete | LoadStatus::Stopped => {
                                     let reload_button = ui.add(Gui::toolbar_button("↻"));
                                     reload_button.widget_info(|| {
                                         let mut info = WidgetInfo::new(WidgetType::Button);
@@ -1239,7 +1237,7 @@ impl Gui {
                                         Self::browser_tab(ui, window, webview, favicon);
                                     }
 
-                                    // Pteron: tabs that were put to sleep to save memory.
+                                    // Sirocco: tabs that were put to sleep to save memory.
                                     for (index, tab) in
                                         window.sleeping_tabs().into_iter().enumerate()
                                     {
@@ -1303,7 +1301,7 @@ impl Gui {
                 *toolbar_height = Length::default();
             }
 
-            // Pteron: full-window settings page.
+            // Sirocco: full-window settings page.
             let active_tab = window.active_webview().map(|webview| webview.id());
             if active_tab != *last_active_tab {
                 settings_page.open = false;
@@ -1311,7 +1309,7 @@ impl Gui {
             }
             // (A pinned sidebar is a panel, so the page area already starts next to it.)
             let page_area = ctx.available_rect_before_wrap();
-            // Pteron: the page starts where the interface ends (in screen points for the window).
+            // Sirocco: the page starts where the interface ends (in screen points for the window).
             *page_rect = page_area;
             *toolbar_height = Length::new(page_area.min.y * scale);
             sidebar::set_left_inset(page_area.min.x * scale);
@@ -1400,7 +1398,7 @@ impl Gui {
                             crate::report::show_in_folder(&path);
                             settings_page.report_note.clear();
                             format!(
-                                "Saved: {}. Send this file to whoever gave you Pteron.",
+                                "Saved: {}. Send this file to whoever gave you Sirocco.",
                                 path.display()
                             )
                         },
@@ -1506,7 +1504,7 @@ impl Gui {
                 webview.resize(PhysicalSize::new(size.width as u32, size.height as u32))
             }
 
-            // Pteron: split view. Both pages are drawn into the one picture of the page area,
+            // Sirocco: split view. Both pages are drawn into the one picture of the page area,
             // each in its own part, with a bar between them that can be dragged.
             let ppp = ctx.pixels_per_point();
             let place = |rect: egui::Rect| {
@@ -1558,7 +1556,7 @@ impl Gui {
             // (Lists and menus of the active page measure from its own corner.)
             sidebar::set_pane_inset((active_pane.min.x - available_rect.min.x) * sidebar::ui_scale());
 
-            // Pteron: the compatibility tab's view covers the page area while it is the active tab
+            // Sirocco: the compatibility tab's view covers the page area while it is the active tab
             // and nothing from egui (a menu, the Settings page, the address bar list) needs to be on top.
             {
                 let active = window.active_webview();
@@ -1584,7 +1582,7 @@ impl Gui {
                 // over the page, which closes it. egui draws a frame only when something happens,
                 // and the mouse over a native view is not something it sees, so while the sidebar
                 // is not pinned the window is redrawn a few times a second to read those reports.
-                // (The page also wakes Pteron itself when it reports something; this is the fallback,
+                // (The page also wakes Sirocco itself when it reports something; this is the fallback,
                 // and with the sidebar pinned it only picks up a finished browser check.)
                 let on_compat_page = active_url.as_ref().is_some_and(|url| crate::compat_view::target(url).is_some());
                 if on_compat_page {
@@ -1641,11 +1639,11 @@ impl Gui {
                 .show(|ui| ui.add(Label::new(status_text.clone()).extend()));
             }
 
-            // Pteron: find in page (Ctrl+F).
+            // Sirocco: find in page (Ctrl+F).
             Self::show_find_bar(ctx, window);
             Self::show_zoom_hud(ctx);
 
-            // Pteron: say which site went full screen, and how to leave.
+            // Sirocco: say which site went full screen, and how to leave.
             let now = ctx.input(|input| input.time);
             if headed_window.is_fullscreen_from_document() {
                 let notice = fullscreen_notice.get_or_insert_with(|| {
@@ -1672,7 +1670,7 @@ impl Gui {
             }
             Self::show_password_bars(ctx, window);
 
-            // Pteron: short messages from reading mode.
+            // Sirocco: short messages from reading mode.
             if let Some(text) = crate::reader::message() {
                 egui::Area::new(Id::new("reader_notice"))
                     .order(Order::Tooltip)
@@ -1685,7 +1683,7 @@ impl Gui {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
 
-            // Pteron: tell the user when a pop-up was blocked.
+            // Sirocco: tell the user when a pop-up was blocked.
             if let Some(count) = pteron::popup_notice() {
                 egui::Area::new(Id::new("popup_blocked_notice"))
                     .order(Order::Tooltip)
@@ -1702,7 +1700,7 @@ impl Gui {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
 
-            // Pteron: download messages and progress.
+            // Sirocco: download messages and progress.
             if let Some(text) = crate::downloads::notice() {
                 egui::Area::new(Id::new("download_notice"))
                     .order(Order::Tooltip)
@@ -1739,7 +1737,7 @@ impl Gui {
                     })),
                 });
             }
-            // Pteron: split view's bar, and a line around the page that has the keyboard.
+            // Sirocco: split view's bar, and a line around the page that has the keyboard.
             if let Some(bar) = *split_divider {
                 let [r, g, b] = crate::appearance::current_accent();
                 let painter = ctx.layer_painter(LayerId::background());
@@ -1755,7 +1753,7 @@ impl Gui {
 
         // If any egui widget requested a repaint, also request a repaint for our
         // containing window. This allows egui widget to animate on their own.
-        // Pteron: only when it is due; a later one is woken up for by the event loop.
+        // Sirocco: only when it is due; a later one is woken up for by the event loop.
         if crate::window::take_due_repaint() {
             window.set_needs_repaint();
         }
@@ -1772,8 +1770,8 @@ impl Gui {
     }
 
     /// Paint the GUI, as of the last update.
-    /// Pteron: the find-in-page bar, top right over the page.
-    /// Pteron: the "Save password?" and "Fill saved login" bars (bottom right over the page).
+    /// Sirocco: the find-in-page bar, top right over the page.
+    /// Sirocco: the "Save password?" and "Fill saved login" bars (bottom right over the page).
     fn show_password_bars(ctx: &egui::Context, window: &ServoShellWindow) {
         use std::time::Duration;
         if crate::passwords::working() {
@@ -1844,7 +1842,7 @@ impl Gui {
                 .page_title()
                 .is_some_and(|title| crate::compat_view::is_challenge_title(&title))
         {
-            // A "checking your browser" page that Servo cannot pass: Pteron opens it in the
+            // A "checking your browser" page that Servo cannot pass: Sirocco opens it in the
             // compatibility tab (by itself, or after asking, as the settings say).
             // With the hand-over on, the page only goes to a compatibility tab to pass the check.
             let now = crate::pteron::settings();
@@ -1867,7 +1865,7 @@ impl Gui {
             } else {
                 place("pteron_challenge_hint").show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.label("This site is checking your browser and Pteron may not get through.");
+                        ui.label("This site is checking your browser and Sirocco may not get through.");
                         ui.horizontal(|ui| {
                             if can {
                                 compat = ui.button("Open in compatibility tab").clicked();
@@ -1898,7 +1896,7 @@ impl Gui {
             let (mut back, mut fine) = (false, false);
             place("pteron_handoff_hint").show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(format!("{host} continues in Pteron's own engine."));
+                    ui.label(format!("{host} continues in Sirocco's own engine."));
                     ui.horizontal(|ui| {
                         back = ui.button("Looks wrong? Use the compatibility tab").clicked();
                         fine = ui.button("OK").clicked();
@@ -1920,7 +1918,7 @@ impl Gui {
             let mut ok = false;
             place("pteron_safe_mode").show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label("Pteron did not close properly last time, so the newer web features are off for this session.");
+                    ui.label("Sirocco did not close properly last time, so the newer web features are off for this session.");
                     ok = ui.button("OK").clicked();
                 });
             });
@@ -1937,7 +1935,7 @@ impl Gui {
         }
     }
 
-    /// Pteron: the zoom level, shown for a moment after a zoom shortcut.
+    /// Sirocco: the zoom level, shown for a moment after a zoom shortcut.
     fn show_zoom_hud(ctx: &egui::Context) {
         let Some(percent) = crate::find::zoom_percent() else { return };
         egui::Area::new(Id::new("pteron_zoom_hud"))
@@ -2071,7 +2069,7 @@ impl Gui {
             .active_webview()
             .and_then(|webview| {
                 let url = webview.url()?;
-                // Pteron: a compatibility tab shows the page it is on, not its placeholder address.
+                // Sirocco: a compatibility tab shows the page it is on, not its placeholder address.
                 if crate::compat_view::target(&url).is_some() {
                     return self
                         .compat_host
@@ -2080,7 +2078,7 @@ impl Gui {
                 }
                 Some(url.to_string())
             })
-            // Pteron: the new-tab page shows an empty address bar.
+            // Sirocco: the new-tab page shows an empty address bar.
             .map(|url| if url == "servo:newtab" { String::new() } else { url });
         match current_url_string {
             Some(location) if location != self.location => {
@@ -2167,7 +2165,7 @@ impl Gui {
         self.context.egui_ctx.set_zoom_factor(factor * self.ui_scale());
     }
 
-    /// Pteron: the interface size setting (1.0 = 100%).
+    /// Sirocco: the interface size setting (1.0 = 100%).
     fn ui_scale(&self) -> f32 {
         if self.sidebar_mode { self.settings.look.scale as f32 / 100.0 } else { 1.0 }
     }
@@ -2185,9 +2183,9 @@ fn embedder_image_to_egui_image(image: &Image) -> egui::ColorImage {
         PixelFormat::K8 => egui::ColorImage::from_gray([width, height], image.data()),
         PixelFormat::KA8 => {
             // Convert to rgba
-            let data: Vec<u8> = image
-                .data()
-                .chunks_exact(2)
+            let (chunks, _) = image.data().as_chunks::<2>();
+            let data: Vec<u8> = chunks
+                .iter()
                 .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
                 .collect();
             egui::ColorImage::from_rgba_unmultiplied([width, height], &data)
@@ -2198,9 +2196,9 @@ fn embedder_image_to_egui_image(image: &Image) -> egui::ColorImage {
         },
         PixelFormat::BGRA8 => {
             // Convert from BGRA to RGBA
-            let data: Vec<u8> = image
-                .data()
-                .chunks_exact(4)
+            let (chunks, _) = image.data().as_chunks::<4>();
+            let data: Vec<u8> = chunks
+                .iter()
                 .flat_map(|chunk| [chunk[2], chunk[1], chunk[0], chunk[3]])
                 .collect();
             egui::ColorImage::from_rgba_unmultiplied([width, height], &data)
@@ -2209,8 +2207,8 @@ fn embedder_image_to_egui_image(image: &Image) -> egui::ColorImage {
 }
 
 /// Uploads all favicons that have not yet been processed to the GPU.
-/// Pteron: apply the theme setting ("system", "light" or "dark").
-/// egui colours for a full Pteron theme.
+/// Sirocco: apply the theme setting ("system", "light" or "dark").
+/// egui colours for a full Sirocco theme.
 fn visuals_for(p: &crate::appearance::Palette) -> egui::Visuals {
     use egui::Color32;
     let c = |rgb: [u8; 3]| Color32::from_rgb(rgb[0], rgb[1], rgb[2]);

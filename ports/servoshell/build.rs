@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap();
 
-    // Pteron: the compatibility tab's engine library is built in on Windows and macOS, and on
+    // Sirocco: the compatibility tab's engine library is built in on Windows and macOS, and on
     // Linux when the `compat_linux` feature is on.
     if target_os == "windows" ||
         target_os == "macos" ||
@@ -69,11 +69,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         #[cfg(not(windows))]
         panic!("Cross-compiling to windows is currently not supported");
-    } else if target_os == "macos" {
-        println!("cargo:rerun-if-changed=platform/macos/count_threads.c");
-        cc::Build::new()
-            .file("platform/macos/count_threads.c")
-            .compile("count_threads");
     } else if target_os == "android" {
         // FIXME: We need this workaround since jemalloc-sys still links
         // to libgcc instead of libunwind, but Android NDK 23c and above

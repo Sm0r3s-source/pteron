@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A newer web feature that Servo has but keeps switched off. Pteron lets the user turn them
+/// A newer web feature that Servo has but keeps switched off. Sirocco lets the user turn them
 /// on one by one (Settings > Web compatibility).
 pub(crate) struct Feature {
     pub id: &'static str,
@@ -50,7 +50,7 @@ pub(crate) const FEATURES: &[Feature] = &[
         id: "container",
         title: "CSS container queries",
         note: "Newer page layouts that adapt to the size of their box.",
-        prefs: &["layout_container_queries_enabled"],
+        prefs: &["layout_css_container_queries_enabled"],
     },
 ];
 
@@ -167,7 +167,7 @@ mod tests {
             "dom_fontface_enabled",
             "dom_offscreen_canvas_enabled",
             "dom_storage_manager_api_enabled",
-            "layout_container_queries_enabled",
+            "layout_css_container_queries_enabled",
         ];
         for feature in FEATURES {
             for pref in feature.prefs {

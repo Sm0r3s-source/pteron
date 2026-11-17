@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: how the browser is laid out and shaped (Pteron's sidebar, or top tabs like other
+//! Sirocco: how the browser is laid out and shaped (Sirocco's sidebar, or top tabs like other
 //! browsers), interface size and buttons, dark mode and your own styles for web pages, and the
 //! shortcuts on the new tab page. Plain data, so it is tested without a window.
 
@@ -12,7 +12,7 @@ use crate::compat_view::{clean_sites, site_listed};
 
 /// Browser layouts: id, name, description, matching colour theme ("" keeps the theme), corners.
 pub(crate) const LAYOUTS: [(&str, &str, &str, &str, u32); 5] = [
-    ("sidebar", "Pteron", "Tabs in a sidebar that slides in from the edge of the window.", "", 8),
+    ("sidebar", "Sirocco", "Tabs in a sidebar that slides in from the edge of the window.", "", 8),
     ("chrome", "Chrome style", "Tabs on top, joined to the toolbar. Menu at the right.", "daylight", 8),
     ("firefox", "Firefox style", "Floating tabs on top, address bar in the middle.", "mist", 6),
     ("opera", "Opera style", "Tabs on top and a bar of shortcuts down the left side.", "nightred", 6),
@@ -80,7 +80,7 @@ pub(crate) struct Look {
     pub site_styles: Vec<SiteStyle>,
     /// The user's own tiles on the new tab page.
     pub shortcuts: Vec<Shortcut>,
-    /// Keep the system's title bar instead of Pteron's own window top.
+    /// Keep the system's title bar instead of Sirocco's own window top.
     pub system_titlebar: bool,
 }
 

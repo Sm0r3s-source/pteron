@@ -63,7 +63,7 @@ pub static enclosing_size: Option<EnclosingSizeFn> = Some(crate::enclosing_size_
 #[cfg(not(feature = "allocation-tracking"))]
 pub static enclosing_size: Option<EnclosingSizeFn> = None;
 
-#[cfg(all(feature = "use-jemalloc", not(any(windows, target_env = "ohos"))))]
+#[cfg(jemalloc_enabled)]
 mod platform {
     use std::ffi::CStr;
     use std::mem::size_of_val;
@@ -151,13 +151,13 @@ mod platform {
         pub use tikv_jemalloc_sys::{free, malloc, realloc};
     }
 
-    /// Pteron: jemalloc's start-up options. By default jemalloc only hands freed memory back to
+    /// Sirocco: jemalloc's start-up options. By default jemalloc only hands freed memory back to
     /// the system while the program keeps allocating, so an idle browser holds on to the memory
     /// of closed tabs indefinitely. A background thread returns it after a few seconds instead.
     #[unsafe(export_name = "_rjem_malloc_conf")]
     pub static MALLOC_CONF: &[u8; 23] = b"background_thread:true\0";
 
-    /// Pteron: hand all freed memory back to the system now (for example after tabs closed).
+    /// Sirocco: hand all freed memory back to the system now (for example after tabs closed).
     pub fn release_free_memory() {
         // "arena.<MALLCTL_ARENAS_ALL>.purge", with MALLCTL_ARENAS_ALL = 4096.
         unsafe {
@@ -172,7 +172,7 @@ mod platform {
     }
 }
 
-#[cfg(all(not(windows), any(target_env = "ohos", not(feature = "use-jemalloc"))))]
+#[cfg(all(not(windows), not(jemalloc_enabled)))]
 mod platform {
     pub use std::alloc::System as Allocator;
     use std::os::raw::c_void;
@@ -208,7 +208,7 @@ mod platform {
         Vec::new()
     }
 
-    /// Pteron: hand freed memory back to the system now (glibc keeps it otherwise).
+    /// Sirocco: hand freed memory back to the system now (glibc keeps it otherwise).
     pub fn release_free_memory() {
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         unsafe {
@@ -249,7 +249,7 @@ mod platform {
         Vec::new()
     }
 
-    /// Pteron: hand freed memory back to the system now. Pteron trims the process heap and
+    /// Sirocco: hand freed memory back to the system now. Sirocco trims the process heap and
     /// working set itself on Windows, so nothing is needed here.
     pub fn release_free_memory() {}
 }

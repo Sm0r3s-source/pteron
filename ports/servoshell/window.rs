@@ -36,7 +36,7 @@ pub(crate) const MIN_WINDOW_INNER_SIZE: DeviceIntSize = DeviceIntSize::new(100, 
 
 static SERVOSHELL_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Pteron: when the next frame is wanted. egui asks for timed frames (a notice, a progress bar,
+/// Sirocco: when the next frame is wanted. egui asks for timed frames (a notice, a progress bar,
 /// polling a compatibility tab); before, any such request drew the next frame at once, so the
 /// window redrew without a pause while one was pending.
 static REPAINT_AT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
@@ -50,7 +50,7 @@ pub(crate) fn repaint_after(delay: Duration) {
     }
 }
 
-/// Pteron: when the next memory clean-up step is due, so an idle window still wakes up for it.
+/// Sirocco: when the next memory clean-up step is due, so an idle window still wakes up for it.
 static CLEANUP_AT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
 
 pub(crate) fn next_cleanup() -> Option<Instant> {
@@ -74,7 +74,7 @@ pub(crate) fn next_repaint() -> Option<Instant> {
     *REPAINT_AT.lock_ok()
 }
 
-/// Pteron: how long a background tab may sit unused before it is put to sleep.
+/// Sirocco: how long a background tab may sit unused before it is put to sleep.
 /// Set `PTERON_TAB_SLEEP_SECS` to change it; `0` turns tab sleeping off. Default: 300 s.
 #[cfg_attr(any(target_os = "android", target_env = "ohos"), expect(dead_code))]
 pub(crate) fn tab_sleep_timeout() -> Option<Duration> {
@@ -91,7 +91,7 @@ pub(crate) fn tab_sleep_timeout() -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
-/// Pteron: ask the system to take back memory that Servo has freed but the heap still holds.
+/// Sirocco: ask the system to take back memory that Servo has freed but the heap still holds.
 /// Closing a tab frees memory inside Servo, but the heap keeps it reserved, so nothing shows
 /// up in Task Manager. On Windows, compacting the heap and trimming the working set hands it
 /// back; elsewhere the allocator is told to release its free pages.
@@ -113,7 +113,7 @@ pub(crate) fn trim_process_memory() {
     servo_allocator::release_free_memory();
 }
 
-/// Pteron: runs at the start of every page and reports how far the top-level page is scrolled
+/// Sirocco: runs at the start of every page and reports how far the top-level page is scrolled
 /// (a moment after scrolling stops), so a tab that went to sleep comes back at the same place.
 pub(crate) const SCROLL_SCRIPT: &str = r#"(function(){try{
 if(window!==window.top||window.__pteronScroll)return;window.__pteronScroll=1;var t=0;
@@ -122,13 +122,13 @@ console.log('__pteron_scroll__'+Math.round(window.scrollY));},400);},{passive:tr
 }catch(e){}})();"#;
 const SCROLL_PREFIX: &str = "__pteron_scroll__";
 
-/// Pteron: a background tab whose `WebView` has been closed to free memory.
+/// Sirocco: a background tab whose `WebView` has been closed to free memory.
 /// Only its address and title are kept; clicking it creates a fresh `WebView`.
 #[derive(Clone, Debug)]
 pub(crate) struct SleepingTab {
     pub(crate) url: Url,
     pub(crate) title: Option<String>,
-    /// Pteron: pinned tabs are listed first and survive restarts.
+    /// Sirocco: pinned tabs are listed first and survive restarts.
     pub(crate) pinned: bool,
     /// How far down the page was scrolled when it went to sleep, in CSS pixels.
     pub(crate) scroll: u32,
@@ -138,7 +138,7 @@ pub(crate) struct SleepingTab {
 pub(crate) struct ServoShellWindowId(u64);
 
 thread_local! {
-    /// Pteron: tab order chosen by dragging (empty until the user drags a tab).
+    /// Sirocco: tab order chosen by dragging (empty until the user drags a tab).
     static TAB_ORDER: RefCell<Vec<WebViewId>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -172,37 +172,37 @@ pub(crate) struct ServoShellWindow {
     pending_favicon_loads: RefCell<Vec<WebViewId>>,
     /// Pending [`UserInterfaceCommand`] that have yet to be processed by the main loop.
     pending_commands: RefCell<Vec<UserInterfaceCommand>>,
-    /// Pteron: tabs that were put to sleep to save memory.
+    /// Sirocco: tabs that were put to sleep to save memory.
     sleeping_tabs: RefCell<Vec<SleepingTab>>,
-    /// Pteron: when each background tab was last in the foreground.
+    /// Sirocco: when each background tab was last in the foreground.
     last_active: RefCell<HashMap<WebViewId, Instant>>,
-    /// Pteron: how far each page is scrolled, as reported by `SCROLL_SCRIPT`.
+    /// Sirocco: how far each page is scrolled, as reported by `SCROLL_SCRIPT`.
     scroll: RefCell<HashMap<WebViewId, u32>>,
-    /// Pteron: tabs that just woke up and should scroll back to where they were once loaded.
+    /// Sirocco: tabs that just woke up and should scroll back to where they were once loaded.
     restore_scroll: RefCell<HashMap<WebViewId, u32>>,
-    /// Pteron: times at which to hand freed memory back to the OS after tabs went to sleep.
+    /// Sirocco: times at which to hand freed memory back to the OS after tabs went to sleep.
     /// Servo finishes tearing a tab down a little after it is closed, so we trim twice.
     pending_trims: RefCell<Vec<Instant>>,
-    /// Pteron: when the engine should next collect garbage (after tabs closed or slept).
+    /// Sirocco: when the engine should next collect garbage (after tabs closed or slept).
     pending_gc: Cell<Option<Instant>>,
-    /// Pteron: the window is minimized or completely covered.
+    /// Sirocco: the window is minimized or completely covered.
     out_of_sight: Cell<bool>,
-    /// Pteron: tabs that are currently playing audio/video. These never sleep.
+    /// Sirocco: tabs that are currently playing audio/video. These never sleep.
     media_playing: RefCell<HashSet<WebViewId>>,
-    /// Pteron: tabs the user muted.
+    /// Sirocco: tabs the user muted.
     muted: RefCell<HashSet<WebViewId>>,
-    /// Pteron: pinned tabs.
+    /// Sirocco: pinned tabs.
     pinned: RefCell<HashSet<WebViewId>>,
-    /// Pteron: tabs the user asked to keep awake (they never go to sleep).
+    /// Sirocco: tabs the user asked to keep awake (they never go to sleep).
     awake: RefCell<HashSet<WebViewId>>,
-    /// Pteron: split view. Where the divider is (0 to 1 across the page area), and the two
+    /// Sirocco: split view. Where the divider is (0 to 1 across the page area), and the two
     /// tabs on screen with the left and right edge of each, in device pixels from the page
     /// area's left edge (set by the interface every frame).
     split_ratio: Cell<f32>,
     panes: Cell<Option<[(WebViewId, f32, f32); 2]>>,
-    /// Pteron: when the session file was last refreshed.
+    /// Sirocco: when the session file was last refreshed.
     last_session_save: Cell<Option<Instant>>,
-    /// Pteron: addresses of recently closed tabs, newest last (Ctrl+Shift+T reopens one).
+    /// Sirocco: addresses of recently closed tabs, newest last (Ctrl+Shift+T reopens one).
     closed_tabs: RefCell<Vec<Url>>,
 }
 
@@ -263,7 +263,7 @@ impl ServoShellWindow {
     ) -> WebView {
         let mut webview_builder = match creation_type {
             TopLevelWebViewCreationRequest::WithUrl(url) => {
-                // Pteron: sites on the compatibility list open there from the first load.
+                // Sirocco: sites on the compatibility list open there from the first load.
                 let url = crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url);
                 WebViewBuilder::new(state.servo(), self.platform_window.rendering_context())
                     .url(url)
@@ -338,7 +338,7 @@ impl ServoShellWindow {
         self.platform_window.clone()
     }
 
-    /// Pteron: the colour scheme pages are told the user prefers: dark while dark mode for pages
+    /// Sirocco: the colour scheme pages are told the user prefers: dark while dark mode for pages
     /// is on (except on the sites it leaves alone), otherwise the system's.
     pub(crate) fn page_theme(&self, url: Option<&Url>) -> servo::Theme {
         let look = crate::pteron::settings().look;
@@ -349,7 +349,7 @@ impl ServoShellWindow {
         }
     }
 
-    /// Pteron: tell every page the colour scheme it should use now.
+    /// Sirocco: tell every page the colour scheme it should use now.
     pub(crate) fn refresh_page_themes(&self) {
         for (_, webview) in self.webviews() {
             webview.notify_theme_change(self.page_theme(webview.url().as_ref()));
@@ -378,7 +378,7 @@ impl ServoShellWindow {
             .all_in_creation_order()
             .map(|(id, webview)| (id, webview.clone()))
             .collect();
-        // Pteron: the order the user dragged the tabs into (new tabs go at the end).
+        // Sirocco: the order the user dragged the tabs into (new tabs go at the end).
         TAB_ORDER.with(|order| {
             let order = order.borrow();
             if !order.is_empty() {
@@ -388,7 +388,7 @@ impl ServoShellWindow {
         list
     }
 
-    /// Pteron: moves the tab `from` to where the tab `to` is now.
+    /// Sirocco: moves the tab `from` to where the tab `to` is now.
     pub(crate) fn move_tab(&self, from: WebViewId, to: WebViewId) {
         let mut ids: Vec<WebViewId> = self.webviews().into_iter().map(|(id, _)| id).collect();
         let (Some(from_at), Some(to_at)) = (
@@ -402,12 +402,12 @@ impl ServoShellWindow {
         TAB_ORDER.with(|order| *order.borrow_mut() = ids);
     }
 
-    /// Pteron: is this tab kept awake?
+    /// Sirocco: is this tab kept awake?
     pub(crate) fn is_awake(&self, id: WebViewId) -> bool {
         self.awake.borrow().contains(&id)
     }
 
-    /// Pteron: keep a tab awake (it never goes to sleep), or stop doing so.
+    /// Sirocco: keep a tab awake (it never goes to sleep), or stop doing so.
     pub(crate) fn toggle_awake(&self, id: WebViewId) {
         let mut awake = self.awake.borrow_mut();
         if !awake.remove(&id) {
@@ -417,7 +417,7 @@ impl ServoShellWindow {
         self.set_needs_update();
     }
 
-    /// Pteron: the split view pair (left, right), and the pair while it is on screen.
+    /// Sirocco: the split view pair (left, right), and the pair while it is on screen.
     pub(crate) fn split(&self) -> Option<(WebViewId, WebViewId)> {
         self.webview_collection.borrow().split()
     }
@@ -426,7 +426,7 @@ impl ServoShellWindow {
         self.webview_collection.borrow().shown_split()
     }
 
-    /// Pteron: show `other` beside the active tab (the active tab on the left), or end split view.
+    /// Sirocco: show `other` beside the active tab (the active tab on the left), or end split view.
     pub(crate) fn set_split_with(&self, other: Option<WebViewId>) {
         let active = self.webview_collection.borrow().active_id();
         // The tab leaving the screen counts as used until now.
@@ -451,7 +451,7 @@ impl ServoShellWindow {
         self.panes.set(panes);
     }
 
-    /// Pteron: in split view, the tab whose page is at `x` (device pixels from the page area's
+    /// Sirocco: in split view, the tab whose page is at `x` (device pixels from the page area's
     /// left edge).
     pub(crate) fn webview_at(&self, x: f32) -> Option<WebView> {
         let (id, ..) = self.panes.get()?.into_iter().find(|(_, min, max)| x >= *min && x < *max)?;
@@ -459,7 +459,7 @@ impl ServoShellWindow {
     }
 
     pub(crate) fn activate_webview(&self, webview_id: WebViewId) {
-        // Pteron: remember when the tab we are leaving went to the background.
+        // Sirocco: remember when the tab we are leaving went to the background.
         let previous = self.webview_collection.borrow().active_id();
         if let Some(previous) = previous &&
             previous != webview_id
@@ -518,7 +518,7 @@ impl ServoShellWindow {
         self.remove_webview(webview_id, true);
     }
 
-    /// Pteron: `remember` puts the page on the "reopen closed tab" list; a tab that only goes to
+    /// Sirocco: `remember` puts the page on the "reopen closed tab" list; a tab that only goes to
     /// sleep stays in the sidebar and must not appear there.
     fn remove_webview(&self, webview_id: WebViewId, remember: bool) {
         let mut webview_collection = self.webview_collection.borrow_mut();
@@ -550,7 +550,7 @@ impl ServoShellWindow {
         self.set_needs_repaint();
     }
 
-    /// Pteron: after a tab closes, goes to sleep or leaves pages behind in its history, collect
+    /// Sirocco: after a tab closes, goes to sleep or leaves pages behind in its history, collect
     /// garbage in the engine a little later (once the pages are gone) and then hand the freed
     /// memory back to the system. An earlier clean-up that is still pending is kept.
     pub(crate) fn schedule_memory_cleanup(&self, delay: Duration) {
@@ -570,7 +570,7 @@ impl ServoShellWindow {
         *CLEANUP_AT.lock_ok() = next;
     }
 
-    /// Pteron: the window was minimized or covered (or came back). The engine already slows down
+    /// Sirocco: the window was minimized or covered (or came back). The engine already slows down
     /// background tabs (timers once a second, no animation frames); while nobody can see the
     /// window, the visible tab gets the same treatment, unless it is playing sound or video.
     pub(crate) fn set_out_of_sight(&self, hidden: bool) {
@@ -592,7 +592,7 @@ impl ServoShellWindow {
         }
     }
 
-    /// Pteron: remember whether a tab is playing media (playing tabs never sleep).
+    /// Sirocco: remember whether a tab is playing media (playing tabs never sleep).
     pub(crate) fn note_media_state(&self, webview_id: WebViewId, event: &MediaSessionEvent) {
         if let MediaSessionEvent::PlaybackStateChange(state) = event {
             let mut playing = self.media_playing.borrow_mut();
@@ -604,17 +604,17 @@ impl ServoShellWindow {
         }
     }
 
-    /// Pteron: is this tab playing sound (audio or video) right now?
+    /// Sirocco: is this tab playing sound (audio or video) right now?
     pub(crate) fn is_audible(&self, id: WebViewId) -> bool {
         self.media_playing.borrow().contains(&id)
     }
 
-    /// Pteron: did the user mute this tab?
+    /// Sirocco: did the user mute this tab?
     pub(crate) fn is_muted(&self, id: WebViewId) -> bool {
         self.muted.borrow().contains(&id)
     }
 
-    /// Pteron: mute a tab, or unmute it. Servo has no switch for a page's sound, so the page's
+    /// Sirocco: mute a tab, or unmute it. Servo has no switch for a page's sound, so the page's
     /// audio and video elements are muted (and new ones as they start playing).
     pub(crate) fn toggle_muted(&self, id: WebViewId) {
         let muted = {
@@ -632,14 +632,14 @@ impl ServoShellWindow {
         self.set_needs_update();
     }
 
-    /// Pteron: a muted tab loaded a new page: mute that one too.
+    /// Sirocco: a muted tab loaded a new page: mute that one too.
     pub(crate) fn reapply_mute(&self, webview: &WebView) {
         if self.is_muted(webview.id()) {
             webview.evaluate_javascript(mute_script(true), |_| {});
         }
     }
 
-    /// Pteron: stop loading the page in the active tab (like the browser's stop button).
+    /// Sirocco: stop loading the page in the active tab (like the browser's stop button).
     pub(crate) fn stop_loading(&self) {
         if let Some(webview) = self.active_webview() {
             webview.evaluate_javascript("window.stop()", |_| {});
@@ -647,12 +647,12 @@ impl ServoShellWindow {
         }
     }
 
-    /// Pteron: the tabs that are currently asleep, in the order they went to sleep.
+    /// Sirocco: the tabs that are currently asleep, in the order they went to sleep.
     pub(crate) fn sleeping_tabs(&self) -> Vec<SleepingTab> {
         self.sleeping_tabs.borrow().clone()
     }
 
-    /// Pteron: wake the sleeping tab at `index` by loading its page in a new `WebView`.
+    /// Sirocco: wake the sleeping tab at `index` by loading its page in a new `WebView`.
     fn wake_sleeping_tab(self: &Rc<Self>, state: &Rc<RunningAppState>, index: usize) {
         let tab = {
             let mut sleeping = self.sleeping_tabs.borrow_mut();
@@ -675,7 +675,7 @@ impl ServoShellWindow {
         self.set_needs_repaint();
     }
 
-    /// Pteron: a console message from `SCROLL_SCRIPT`? Remembers the position and swallows it.
+    /// Sirocco: a console message from `SCROLL_SCRIPT`? Remembers the position and swallows it.
     pub(crate) fn handle_scroll_message(&self, id: WebViewId, message: &str) -> bool {
         let Some(position) = message.strip_prefix(SCROLL_PREFIX) else {
             return false;
@@ -686,7 +686,7 @@ impl ServoShellWindow {
         true
     }
 
-    /// Pteron: a page started or finished loading. A new page starts at the top; a tab that just
+    /// Sirocco: a page started or finished loading. A new page starts at the top; a tab that just
     /// woke up goes back to where it was (again a moment later, when pictures have made room).
     pub(crate) fn note_load_status(&self, webview: &WebView, complete: bool) {
         if !complete {
@@ -699,12 +699,12 @@ impl ServoShellWindow {
         }
     }
 
-    /// Pteron: is this tab pinned?
+    /// Sirocco: is this tab pinned?
     pub(crate) fn is_pinned(&self, id: WebViewId) -> bool {
         self.pinned.borrow().contains(&id)
     }
 
-    /// Pteron: pin or unpin a live tab.
+    /// Sirocco: pin or unpin a live tab.
     pub(crate) fn toggle_pin(&self, id: WebViewId) {
         let mut pinned = self.pinned.borrow_mut();
         if !pinned.remove(&id) {
@@ -714,7 +714,7 @@ impl ServoShellWindow {
         self.set_needs_update();
     }
 
-    /// Pteron: pin or unpin a sleeping tab.
+    /// Sirocco: pin or unpin a sleeping tab.
     pub(crate) fn toggle_pin_sleeping(&self, index: usize) {
         if let Some(tab) = self.sleeping_tabs.borrow_mut().get_mut(index) {
             tab.pinned = !tab.pinned;
@@ -722,13 +722,13 @@ impl ServoShellWindow {
         self.set_needs_update();
     }
 
-    /// Pteron: bring back tabs from the last session without loading them.
+    /// Sirocco: bring back tabs from the last session without loading them.
     pub(crate) fn add_sleeping_tab(&self, tab: SleepingTab) {
         self.sleeping_tabs.borrow_mut().push(tab);
         self.set_needs_update();
     }
 
-    /// Pteron: write the open tabs to the session file (at most every 2 seconds).
+    /// Sirocco: write the open tabs to the session file (at most every 2 seconds).
     fn save_session(&self) {
         // Give restored tabs a few seconds to start loading before the first save.
         static STARTED: OnceLock<Instant> = OnceLock::new();
@@ -773,7 +773,7 @@ impl ServoShellWindow {
         }
     }
 
-    /// Pteron: runs once per event-loop spin. Wakes a tab if none is left open and puts
+    /// Sirocco: runs once per event-loop spin. Wakes a tab if none is left open and puts
     /// long-idle background tabs to sleep.
     fn maintain_tabs(self: &Rc<Self>, state: &Rc<RunningAppState>) {
         crate::memsaver::set_tabs(self.webviews().len());
@@ -918,7 +918,7 @@ impl ServoShellWindow {
         webview: WebView,
         embedder_control: EmbedderControl,
     ) {
-        // Pteron: alert, confirm and prompt boxes say which site they come from.
+        // Sirocco: alert, confirm and prompt boxes say which site they come from.
         match embedder_control {
             EmbedderControl::SimpleDialog(dialog) => {
                 self.platform_window.show_page_dialog(webview.id(), dialog, site_of(&webview));
@@ -955,7 +955,7 @@ impl ServoShellWindow {
             match event {
                 UserInterfaceCommand::Go(location) => {
                     self.set_needs_update();
-                    // Pteron: search several engines at once, when switched on in Settings.
+                    // Sirocco: search several engines at once, when switched on in Settings.
                     let normal = location_bar_input_to_url(&location, &crate::pteron::search_url());
                     let intent = crate::multisearch::intent_for(
                         &crate::pteron::settings(),
@@ -1156,7 +1156,7 @@ pub(crate) trait PlatformWindow {
         _request: BluetoothDeviceSelectionRequest,
     ) {
     }
-    /// `site`: the address of the page asking (Pteron says who is asking).
+    /// `site`: the address of the page asking (Sirocco says who is asking).
     fn show_permission_dialog(&self, _: WebViewId, _: PermissionRequest, _site: String) {}
     /// An alert, confirm or prompt box from the page; `site` says who it is from.
     fn show_page_dialog(&self, id: WebViewId, dialog: servo::SimpleDialog, _site: String) {
@@ -1172,7 +1172,6 @@ pub(crate) trait PlatformWindow {
     ) {
     }
 
-    fn notify_media_session_event(&self, _: MediaSessionEvent) {}
     fn notify_crashed(&self, _: WebView, _reason: String, _backtrace: Option<String>) {}
     fn show_console_message(&self, _level: ConsoleLogLevel, _message: &str) {}
 
@@ -1191,7 +1190,7 @@ pub(crate) trait PlatformWindow {
     fn notify_accessibility_tree_update(&self, _: WebView, _: accesskit::TreeUpdate) {}
 }
 
-/// Pteron: the site a tab shows, as people read it ("example.com"), for dialogs that say who
+/// Sirocco: the site a tab shows, as people read it ("example.com"), for dialogs that say who
 /// is asking. Look-alike letters stay in their real (xn--) form.
 pub(crate) fn site_of(webview: &WebView) -> String {
     webview
@@ -1203,7 +1202,7 @@ pub(crate) fn site_of(webview: &WebView) -> String {
         .unwrap_or_else(|| "This page".to_string())
 }
 
-/// Pteron: mute (or unmute) every audio and video element of a page and its same-site frames,
+/// Sirocco: mute (or unmute) every audio and video element of a page and its same-site frames,
 /// and keep muting the ones that start playing later (also those not in the page, `new Audio()`).
 /// Elements the page had muted itself stay muted after unmuting.
 fn mute_script(muted: bool) -> String {

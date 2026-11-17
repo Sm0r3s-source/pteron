@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: known phishing and malware sites. Two free lists from the malware-filter project
+//! Sirocco: known phishing and malware sites. Two free lists from the malware-filter project
 //! (sites URLhaus reports as spreading malware, and phishing sites from PhishTank, OpenPhish
 //! and others) are downloaded once a week into the settings folder. A page on a listed site is
 //! replaced by a warning; pictures, scripts and frames from such sites are not loaded. Nothing
@@ -41,7 +41,7 @@ static SITES: RwLock<Vec<Box<str>>> = RwLock::new(Vec::new());
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static LOADING: AtomicBool = AtomicBool::new(false);
 static COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Sites the user chose to open anyway, until Pteron closes.
+/// Sites the user chose to open anyway, until Sirocco closes.
 static ALLOWED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn dir() -> Option<PathBuf> {
@@ -179,10 +179,10 @@ pub(crate) fn warning_html(url: &Url) -> String {
         "<!doctype html><meta charset=utf-8><title>Dangerous site</title>{}\
 <h1 style=\"color:#c0392b\">This site is known to be dangerous</h1>\
 <p class=sub><b>{}</b> is on public lists of sites that steal passwords and card numbers (phishing) \
-or spread harmful programs. Pteron did not open it.</p>\
+or spread harmful programs. Sirocco did not open it.</p>\
 <div class=card><h2>What do you want to do?</h2><p><a class=btn href=\"servo:newtab\">Take me somewhere safe</a></p>\
 <p>If you are sure this is a mistake: <a href=\"servo:danger-continue?url={}&amp;t={}\">open the site \
-anyway</a> (until you close Pteron). Never type a password there.</p></div>\
+anyway</a> (until you close Sirocco). Never type a password there.</p></div>\
 <p class=sub>Lists by the malware-filter project (URLhaus, PhishTank, OpenPhish and others), checked on \
 your computer. You can turn this off in Settings &rarr; Privacy &amp; data.</p>",
         crate::pteron::PAGE_STYLE_PUBLIC,

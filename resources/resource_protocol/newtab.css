@@ -169,7 +169,7 @@ button {
   text-overflow: ellipsis;
 }
 
-/* Pteron: the user's own shortcuts can be removed, and new ones added from the page. */
+/* Sirocco: the user's own shortcuts can be removed, and new ones added from the page. */
 .own {
   position: relative;
   display: inline-flex;

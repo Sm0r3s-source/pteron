@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: colour themes and the new tab page background. Everything here is plain data
+//! Sirocco: colour themes and the new tab page background. Everything here is plain data
 //! and text, so it can be tested without a window; the GUI turns the colours into egui styles.
 
 use std::path::PathBuf;
@@ -229,7 +229,7 @@ fn picture_file() -> Option<(PathBuf, &'static str)> {
     None
 }
 
-/// Copies a picture the user chose into Pteron's folder.
+/// Copies a picture the user chose into Sirocco's folder.
 pub(crate) fn save_picture(source: &std::path::Path) -> Result<(), String> {
     let extension = source
         .extension()
@@ -246,7 +246,7 @@ pub(crate) fn save_picture(source: &std::path::Path) -> Result<(), String> {
             MAX_PICTURE_BYTES / 1_048_576
         ));
     }
-    let dir = data_dir().ok_or("Could not find Pteron's folder.")?;
+    let dir = data_dir().ok_or("Could not find Sirocco's folder.")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     for old in ["jpg", "jpeg", "png", "webp", "gif"] {
         let _ = std::fs::remove_file(dir.join(format!("newtab-background.{old}")));

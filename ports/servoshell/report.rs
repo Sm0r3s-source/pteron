@@ -1,7 +1,7 @@
-/* Pteron: "Report a problem". Saves a small text file on the Desktop with the facts that help to
+/* Sirocco: "Report a problem". Saves a small text file on the Desktop with the facts that help to
  * find a problem (versions, computer, settings, the newest crash log and the user's own note)
- * and opens the folder, so the person can send that one file to whoever gave them Pteron.
- * Nothing is sent anywhere by Pteron itself. */
+ * and opens the folder, so the person can send that one file to whoever gave them Sirocco.
+ * Nothing is sent anywhere by Sirocco itself. */
 
 use std::path::PathBuf;
 
@@ -27,9 +27,9 @@ pub(crate) fn compose(
 ) -> String {
     let note = note.trim();
     format!(
-        "Pteron problem report\n\
+        "Sirocco problem report\n\
          =====================\n\
-         Pteron build {build} (Servo 0.7.0)\n\
+         Sirocco build {build} (Servo 0.8.0)\n\
          Made: {when}\n\n\
          What happened (written by the user):\n{}\n\n\
          This computer:\n{}\n\n\
@@ -80,7 +80,7 @@ fn newest_crash_log() -> Option<(String, String)> {
     Some((name, tail_lines(&text, LOG_LINES)))
 }
 
-/// A file name that sorts by time, from the current time: `Pteron-report-2026-10-10-1530.txt`.
+/// A file name that sorts by time, from the current time: `Sirocco-report-2026-10-10-1530.txt`.
 fn file_name(now_secs: i64) -> String {
     let stamp = crate::crashlog::timestamp(now_secs); // "YYYY-MM-DD HH:MM:SS UTC"
     let digits: String = stamp
@@ -89,7 +89,7 @@ fn file_name(now_secs: i64) -> String {
         .map(|c| if c == ' ' { '-' } else { c })
         .filter(|c| c.is_ascii_digit() || *c == '-')
         .collect();
-    format!("Pteron-report-{digits}.txt")
+    format!("Sirocco-report-{digits}.txt")
 }
 
 /// Writes the report on the Desktop (or the home folder) and returns where it is.
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn file_name_is_safe_for_windows() {
         let name = file_name(1_791_000_000);
-        assert!(name.starts_with("Pteron-report-") && name.ends_with(".txt"), "{name}");
+        assert!(name.starts_with("Sirocco-report-") && name.ends_with(".txt"), "{name}");
         assert!(!name.contains(':') && !name.contains(' '), "{name}");
     }
 }

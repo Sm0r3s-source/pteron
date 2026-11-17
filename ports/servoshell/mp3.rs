@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: turns a downloaded `.m4a` (AAC) file into an `.mp3`, entirely inside Pteron.
+//! Sirocco: turns a downloaded `.m4a` (AAC) file into an `.mp3`, entirely inside Sirocco.
 //! The sound is decoded with Symphonia (pure Rust) and encoded with LAME at 192 kbit/s (128 for mono).
 //! Memory use stays small: the file is processed packet by packet.
 
@@ -71,7 +71,7 @@ pub(crate) fn m4a_to_mp3(
     hint.with_extension("m4a");
     let mut format = symphonia::default::get_probe()
         .format(&hint, stream, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| format!("Not a sound file Pteron can read: {e}"))?
+        .map_err(|e| format!("Not a sound file Sirocco can read: {e}"))?
         .format;
     let track = format
         .tracks()
@@ -83,7 +83,7 @@ pub(crate) fn m4a_to_mp3(
     let total_frames = params.n_frames;
     let mut decoder = symphonia::default::get_codecs()
         .make(&params, &DecoderOptions::default())
-        .map_err(|e| format!("Pteron cannot decode this sound: {e}"))?;
+        .map_err(|e| format!("Sirocco cannot decode this sound: {e}"))?;
     let mut encoder: Option<mp3lame_encoder::Encoder> = None;
     let mut channels = 2u8;
     let mut out = File::create(output).map_err(|e| format!("Could not create the MP3 file: {e}"))?;

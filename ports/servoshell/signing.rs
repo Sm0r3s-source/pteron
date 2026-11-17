@@ -1,5 +1,5 @@
 //! Update signatures: an update is only installed if its SHA-256 is signed with the author's key.
-//! The public half of the key is built into Pteron; the private half never leaves the author's PC.
+//! The public half of the key is built into Sirocco; the private half never leaves the author's PC.
 
 use ring::signature::{ED25519, UnparsedPublicKey};
 

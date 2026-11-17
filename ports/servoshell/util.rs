@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: small helpers shared by several modules (base64, random codes, private temp folder).
+//! Sirocco: small helpers shared by several modules (base64, random codes, private temp folder).
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -53,9 +53,9 @@ pub(crate) fn random_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A folder for Pteron's temporary files that other users of the computer cannot reach.
+/// A folder for Sirocco's temporary files that other users of the computer cannot reach.
 /// Windows' temp folder is already per user; on Linux the shared `/tmp` is not, so
-/// `~/.cache/Pteron/tmp` (only the owner may enter) is used instead.
+/// `~/.cache/Sirocco/tmp` (only the owner may enter) is used instead.
 pub(crate) fn private_temp(name: &str) -> std::path::PathBuf {
     #[cfg(windows)]
     return std::env::temp_dir().join(name);
@@ -64,7 +64,7 @@ pub(crate) fn private_temp(name: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let base = dirs::cache_dir()
             .unwrap_or_else(|| std::env::temp_dir().join(format!("pteron-{}", unsafe { libc::getuid() })))
-            .join("Pteron")
+            .join("Sirocco")
             .join("tmp");
         let _ = std::fs::create_dir_all(&base);
         let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
@@ -72,14 +72,14 @@ pub(crate) fn private_temp(name: &str) -> std::path::PathBuf {
     }
 }
 
-/// Linux: makes Pteron's folders (settings, history, cookies, saved pages) owner-only, so other
+/// Linux: makes Sirocco's folders (settings, history, cookies, saved pages) owner-only, so other
 /// users of the same computer cannot read them even where home folders are open to everyone.
 /// Windows' own folders are already per user.
 pub(crate) fn lock_down_folders() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let app = "Pteron";
+        let app = "Sirocco";
         let folders = [
             dirs::config_dir().map(|d| d.join(app)),
             dirs::data_dir().map(|d| d.join(app)),

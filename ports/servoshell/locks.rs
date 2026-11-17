@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: a lock that keeps working after another thread panicked while holding it.
+//! Sirocco: a lock that keeps working after another thread panicked while holding it.
 //! (A plain `lock().unwrap()` would make every later user panic too, which could stop all video.)
 
 use std::sync::{Mutex, MutexGuard};

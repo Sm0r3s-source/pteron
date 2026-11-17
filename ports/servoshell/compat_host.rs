@@ -1,4 +1,4 @@
-//! The system web engine (WebView2 on Windows, WebKit on macOS) drawn inside Pteron's window
+//! The system web engine (WebView2 on Windows, WebKit on macOS) drawn inside Sirocco's window
 //! over the page area, one view per compatibility tab. Views are created when a compatibility
 //! tab is first shown, hidden (and told to use less memory) when it is not, and dropped after a
 //! while hidden; the address is kept, so the tab reloads when it is clicked again.
@@ -36,7 +36,7 @@ struct Entry {
     /// (this runs every frame): on screen, its area in pixels, low memory.
     shown: bool,
     bounds: Option<(i32, i32, u32, u32)>,
-    /// The holes cut for Pteron's menus over the view, in pixels from its corner (the last
+    /// The holes cut for Sirocco's menus over the view, in pixels from its corner (the last
     /// number is how round their corners are).
     holes: Vec<[i32; 5]>,
     low: bool,
@@ -60,7 +60,7 @@ pub(crate) struct Host {
     entries: HashMap<WebViewId, Entry>,
     /// A memory trim is running until then (the engine is told "low memory" for a moment).
     trim_until: Option<Instant>,
-    /// A text box of Pteron's own (the sidebar search) had the keyboard last frame.
+    /// A text box of Sirocco's own (the sidebar search) had the keyboard last frame.
     typing: bool,
     /// Tabs just handed over to Servo: no new view for them until Servo has loaded the page.
     released: HashMap<WebViewId, Instant>,
@@ -91,7 +91,7 @@ fn browser_args() -> String {
     args
 }
 
-/// Linux: WebKitGTK draws and works through GTK's main loop, which nothing else runs, so Pteron
+/// Linux: WebKitGTK draws and works through GTK's main loop, which nothing else runs, so Sirocco
 /// runs the waiting GTK events itself (a few times a second while a compatibility view is open).
 #[cfg(all(target_os = "linux", pteron_wry))]
 pub(crate) fn pump_gtk() {
@@ -117,7 +117,7 @@ fn gtk_ready() -> bool {
     *READY.get_or_init(|| gtk::init().is_ok())
 }
 
-/// Linux: Pteron starts in X11 mode (through XWayland on a Wayland desktop) because the
+/// Linux: Sirocco starts in X11 mode (through XWayland on a Wayland desktop) because the
 /// system web engine can only be placed inside an X11 window. `PTERON_WAYLAND=1` keeps Wayland
 /// (the compatibility tab is then not available).
 #[cfg(target_os = "linux")]
@@ -130,7 +130,7 @@ pub(crate) fn prefer_x11() -> bool {
 /// 2 at its left edge, 3 at its right edge.
 static POINTER: AtomicU8 = AtomicU8::new(0);
 
-/// Added to every page: tells Pteron where the mouse is, because egui cannot see the mouse over
+/// Added to every page: tells Sirocco where the mouse is, because egui cannot see the mouse over
 /// a native view (the sidebar needs it to open and close).
 #[cfg(pteron_wry)]
 const POINTER_SCRIPT: &str = "(()=>{let s='';const p=v=>{if(v!==s){s=v;try{window.ipc.postMessage(v)}catch(e){}}};\
@@ -237,7 +237,7 @@ impl Host {
     }
 
     /// Closing a view leaves the engine's helper processes running for a long time. Once the last
-    /// view is gone they are ended (only the ones that use Pteron's own compatibility folder).
+    /// view is gone they are ended (only the ones that use Sirocco's own compatibility folder).
     fn clean_up_engine(&mut self) {
         let open = self.alive() > 0;
         if open {
@@ -298,7 +298,7 @@ impl Host {
             POINTER.store(0, Relaxed);
         }
         // The native view keeps the keyboard after a click in the page, even when the next click is
-        // in a Pteron text box: when one starts wanting the keyboard, take it back.
+        // in a Sirocco text box: when one starts wanting the keyboard, take it back.
         // (This counts while the compatibility tab is the active one, also when the view is hidden
         // for the address bar, which is exactly when the keyboard has to come back.)
         let on_compat = active.is_some_and(|(_, placeholder)| crate::compat_view::target(placeholder).is_some());
@@ -313,7 +313,7 @@ impl Host {
         }
         self.typing = typing;
         // The native view keeps the keyboard (and so the typing) after it is hidden or the tab is
-        // switched: when it goes away, the keyboard goes back to Pteron's own window.
+        // switched: when it goes away, the keyboard goes back to Sirocco's own window.
         if self.was_shown && shown_id.is_none() {
             window.focus_window();
             #[cfg(pteron_wry)]
@@ -352,7 +352,7 @@ impl Host {
         self.clean_up_engine();
     }
 
-    /// Pteron's menus are drawn in its own window, under the system's view: the view gets holes
+    /// Sirocco's menus are drawn in its own window, under the system's view: the view gets holes
     /// where they are, so they show and the page stays on screen around them (Windows here,
     /// Linux below).
     #[cfg(all(pteron_wry, windows))]
@@ -638,7 +638,7 @@ impl Entry {
     }
 }
 
-/// End the system engine's helper processes that were started for Pteron's compatibility folder.
+/// End the system engine's helper processes that were started for Sirocco's compatibility folder.
 #[cfg(windows)]
 fn end_engine_processes() {
     let script = format!(

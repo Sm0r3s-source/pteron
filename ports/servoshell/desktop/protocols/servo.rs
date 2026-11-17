@@ -8,10 +8,10 @@
 //! - servo:experimental-preferences
 //! - servo:config
 //! - servo:newtab
-//! - servo:newtab-edit (Pteron: add or remove a new tab shortcut)
-//! - servo:welcome (Pteron)
-//! - servo:known-issues (Pteron)
-//! - servo:history (Pteron: browsing history; never opened by web pages)
+//! - servo:newtab-edit (Sirocco: add or remove a new tab shortcut)
+//! - servo:welcome (Sirocco)
+//! - servo:known-issues (Sirocco)
+//! - servo:history (Sirocco: browsing history; never opened by web pages)
 //! - servo:preferences
 
 use std::future::Future;
@@ -60,7 +60,7 @@ impl ProtocolHandler for ServoProtocolHandler {
                 context,
                 "/config.html",
             ),
-            // Pteron: the new-tab page is generated so its search box uses the chosen engine.
+            // Sirocco: the new-tab page is generated so its search box uses the chosen engine.
             "newtab" => html_response(request, crate::pteron::newtab_html()),
             "newtab-edit" => html_response(request, crate::pteron::newtab_edit(url.as_url())),
             "welcome" => html_response(request, crate::pteron::welcome_html()),
@@ -106,11 +106,11 @@ impl ProtocolHandler for ServoProtocolHandler {
     }
 }
 
-/// Pteron: what may load a `servo:` page. These pages hold private things (the new tab page lists
+/// Sirocco: what may load a `servo:` page. These pages hold private things (the new tab page lists
 /// shortcuts, bookmarks and most visited sites, and secrets that let it change them), so:
 /// - no web page may read one (fetch, XHR); the config page may read the two plain answers it asks for;
 /// - no page may put one in a frame;
-/// - a web page may open only the harmless ones in a tab; the rest open only from Pteron itself
+/// - a web page may open only the harmless ones in a tab; the rest open only from Sirocco itself
 ///   or from another `servo:` page (whose origin is opaque).
 fn allowed(request: &Request, path: &str) -> bool {
     let from_web_page = matches!(request.origin, Origin::Origin(_)) && !request.origin.is_opaque();

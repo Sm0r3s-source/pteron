@@ -244,7 +244,7 @@ impl TimerRefreshDriver {
 
 impl RefreshDriver for TimerRefreshDriver {
     fn observe_next_frame(&self, new_start_frame_callback: Box<dyn Fn() + Send + 'static>) {
-        // Pteron: the frame rate is a preference (60 by default) instead of a fixed 120.
+        // Sirocco: the frame rate is a preference (60 by default) instead of a fixed 120.
         let frames_per_second = servo_config::pref!(paint_frame_rate).clamp(10, 240) as u64;
         self.queue_timer(
             Duration::from_millis(1000 / frames_per_second),

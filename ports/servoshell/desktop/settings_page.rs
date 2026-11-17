@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: a full-window settings page (categories on the left, options on the right),
+//! Sirocco: a full-window settings page (categories on the left, options on the right),
 //! drawn with egui on top of the page area.
 
 use egui::{
@@ -70,7 +70,7 @@ pub(crate) enum PageAction {
     ClearCache,
     ForgetSession,
     ClearHistory,
-    /// Close Pteron and let the downloaded update replace the files.
+    /// Close Sirocco and let the downloaded update replace the files.
     InstallUpdate,
     /// Save a problem report file on the Desktop, with this note from the user.
     SaveReport(String),
@@ -464,7 +464,7 @@ fn multi_search_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool
                     "page",
                     "One merged results page",
                     Some(
-                        "Pteron reads the results of each engine and shows them in one list. Uses less \
+                        "Sirocco reads the results of each engine and shows them in one list. Uses less \
                          memory than tabs, but works for DuckDuckGo, Bing, Brave and SearXNG only. If an \
                          engine changes its pages or blocks the request, it is shown as a link instead.",
                     ),
@@ -696,7 +696,7 @@ fn startup_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
     let mut changed = false;
     card(
         ui,
-        "When Pteron starts",
+        "When Sirocco starts",
         Some("Pinned tabs always come back."),
         "startup start launch homepage restore session new tab",
         |ui| {
@@ -824,10 +824,10 @@ fn compat_tab_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         ui,
         "Compatibility tab",
         Some(
-            "Some sites (Cloudflare's browser check, for example) cannot be passed by Pteron's \
+            "Some sites (Cloudflare's browser check, for example) cannot be passed by Sirocco's \
              engine. A compatibility tab shows such a page with your system's own web engine \
              (WebView2 on Windows) inside a normal tab. It uses extra memory only while it is \
-             open, and it keeps its own cookies, so you sign in separately there. Pteron's ad \
+             open, and it keeps its own cookies, so you sign in separately there. Sirocco's ad \
              blocker and passwords do not apply inside it.",
         ),
         "compatibility tab cloudflare webview2 browser check just a moment",
@@ -837,9 +837,9 @@ fn compat_tab_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                 .changed();
             ui.label(
                 RichText::new(
-                    "When a site's browser check passes, Pteron copies the pass (a cookie) to its own engine and \
+                    "When a site's browser check passes, Sirocco copies the pass (a cookie) to its own engine and \
                      closes the heavy one, so it only runs for a few seconds. If the site does not accept it, \
-                     the page goes back to a compatibility tab. While this is on, Pteron presents itself with \
+                     the page goes back to a compatibility tab. While this is on, Sirocco presents itself with \
                      the system engine's browser name, and the other compatibility options below are switched off.",
                 )
                 .small()
@@ -849,14 +849,14 @@ fn compat_tab_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
             changed |= site_list(
                 ui,
                 "compat_keep_input",
-                "Sites that never use Pteron's own engine (it draws them badly). They always open in a compatibility tab, in every mode:",
+                "Sites that never use Sirocco's own engine (it draws them badly). They always open in a compatibility tab, in every mode:",
                 &mut settings.compat_tab_keep_sites,
             );
             ui.add_space(6.0);
             ui.add_enabled_ui(!settings.compat_tab_handoff, |ui| {
                 changed |= radios(ui, &mut settings.compat_tab_mode, &[
                     ("auto", "Switch automatically", Some("A browser-check page moves to a compatibility tab by itself.")),
-                    ("ask", "Ask me", Some("Pteron asks first.")),
+                    ("ask", "Ask me", Some("Sirocco asks first.")),
                     ("off", "Off", Some("Only the notice with Open in default browser.")),
                 ]);
                 ui.add_space(6.0);
@@ -869,7 +869,7 @@ fn compat_tab_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
             ui.label(
                 RichText::new(
                     "Turns off the engine's graphics helper. Saves memory (often around 50 MB), but scrolling \
-                     and video can be slower. Applies the next time Pteron starts.",
+                     and video can be slower. Applies the next time Sirocco starts.",
                 )
                 .small()
                 .weak(),
@@ -885,10 +885,10 @@ fn memory_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         ui,
         "Memory saver",
         Some(
-            "For older or low-memory computers. Pteron uses less memory, but some things get \
+            "For older or low-memory computers. Sirocco uses less memory, but some things get \
              slower: videos buffer less and may pause on a slow connection, background tabs \
              sleep sooner and reload when you come back, and pages may load a little slower. \
-             Changing the level needs a restart of Pteron. At every level, background tabs go to \
+             Changing the level needs a restart of Sirocco. At every level, background tabs go to \
              sleep early while the computer is short of memory.",
         ),
         "memory saver low ram reduce usage old slow computer",
@@ -900,7 +900,7 @@ fn memory_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                     "Low memory",
                     Some(
                         "Smaller video buffer, background tabs sleep after 3 minutes, memory is handed \
-                         back to the system when Pteron is in the background, fewer helper threads, \
+                         back to the system when Sirocco is in the background, fewer helper threads, \
                          only the last page kept ready for Back, at most 8 background tabs awake.",
                     ),
                 ),
@@ -925,7 +925,7 @@ fn memory_card(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
                         mb + helpers
                     ),
                 };
-                ui.label(format!("Pteron is using about {mb} MB right now.{more}"));
+                ui.label(format!("Sirocco is using about {mb} MB right now.{more}"));
             }
         },
     );
@@ -938,14 +938,14 @@ fn video_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         ui,
         "YouTube",
         Some(
-            "YouTube's own website needs web features Pteron does not have yet. With this on, \
-             YouTube search, channels and videos open in simple Pteron pages instead. Videos \
+            "YouTube's own website needs web features Sirocco does not have yet. With this on, \
+             YouTube search, channels and videos open in simple Sirocco pages instead. Videos \
              play up to 1080p (they start at 720p to save memory). Nothing needs to be installed.",
         ),
         "youtube video player watch quality",
         |ui| {
             changed |= ui
-                .checkbox(&mut settings.youtube_player, "Browse and play YouTube in Pteron's own pages")
+                .checkbox(&mut settings.youtube_player, "Browse and play YouTube in Sirocco's own pages")
                 .changed();
             changed |= ui
                 .checkbox(&mut settings.fast_start, "Start long videos sooner (first 75 seconds at once, then the whole video)")
@@ -957,7 +957,7 @@ fn video_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         "SponsorBlock",
         Some(
             "Skips sponsor messages, self-promotion and \"like and subscribe\" reminders that other \
-             viewers have marked, and shows them on the seek bar. Pteron asks sponsor.ajay.app \
+             viewers have marked, and shows them on the seek bar. Sirocco asks sponsor.ajay.app \
              with only the first characters of a scrambled video number, so the service cannot \
              tell which video you watch.",
         ),
@@ -984,7 +984,7 @@ fn video_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         Some(
             "Lets your graphics card decode video instead of the processor. Smoother playback, \
              less CPU use and longer battery life. Turn it off if videos show green or broken \
-             pictures. Takes effect after you restart Pteron.",
+             pictures. Takes effect after you restart Sirocco.",
         ),
         "hardware acceleration gpu video decode graphics card battery",
         |ui| {
@@ -1002,16 +1002,16 @@ fn compat_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         ui,
         "Newer web features",
         Some(
-            "Servo, the engine inside Pteron, has these features built in but switched off \
+            "Servo, the engine inside Sirocco, has these features built in but switched off \
              because they are still being finished. Turning one on can make a site work that \
              did not, but it can also make a page slower or crash. Pages reload when you change \
-             a switch. If Pteron does not close properly, these stay off for the next session.",
+             a switch. If Sirocco does not close properly, these stay off for the next session.",
         ),
         "compatibility experimental features indexeddb intersection observer fontface canvas storage container queries web apps",
         |ui| {
             if crate::compat::safe_mode() && !settings.compat.is_empty() {
                 ui.label(
-                    RichText::new("Pteron did not close properly last time, so these are off for this session. Restart Pteron to use them again.")
+                    RichText::new("Sirocco did not close properly last time, so these are off for this session. Restart Sirocco to use them again.")
                         .color(ui.visuals().warn_fg_color),
                 );
                 ui.add_space(6.0);
@@ -1063,13 +1063,13 @@ fn privacy_section(
         ui,
         "Passwords",
         Some(
-            "Pteron asks before saving a login, and fills it only when you click. Saved passwords \
+            "Sirocco asks before saving a login, and fills it only when you click. Saved passwords \
              are encrypted, kept only on this computer, and never synced.",
         ),
         "passwords logins saved autofill sign in remember",
         |ui| {
             if !crate::passwords::supported() {
-                ui.label("Saved passwords work on Windows and Linux. On this system Pteron does not offer to save them.");
+                ui.label("Saved passwords work on Windows and Linux. On this system Sirocco does not offer to save them.");
                 return;
             }
             let mut on = crate::passwords::enabled();
@@ -1131,7 +1131,7 @@ fn privacy_section(
         "Sync between computers",
         Some(
             "Keeps your bookmarks and settings the same on two computers through a folder that \
-             both have, such as one inside OneDrive, Google Drive or Dropbox. Pteron only writes \
+             both have, such as one inside OneDrive, Google Drive or Dropbox. Sirocco only writes \
              one small file there. History, passwords and cookies are never synced.",
         ),
         "sync synchronize devices computers phone laptop bookmarks settings onedrive drive dropbox backup",
@@ -1159,7 +1159,7 @@ fn privacy_section(
                 });
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Changes are saved to the folder as you make them. Another computer's changes are picked up when Pteron starts, or when you press Sync now.")
+                    RichText::new("Changes are saved to the folder as you make them. Another computer's changes are picked up when Sirocco starts, or when you press Sync now.")
                         .small()
                         .weak(),
                 );
@@ -1249,11 +1249,11 @@ fn privacy_section(
     card(
         ui,
         "Clear on exit",
-        Some("Forget what you looked at each time you close Pteron."),
+        Some("Forget what you looked at each time you close Sirocco."),
         "clear exit close history cache privacy forget",
         |ui| {
             *changed |= ui
-                .checkbox(&mut settings.clear_on_exit, "Clear history and cache when I close Pteron")
+                .checkbox(&mut settings.clear_on_exit, "Clear history and cache when I close Sirocco")
                 .changed();
             ui.add_space(2.0);
             ui.label(RichText::new("Bookmarks, settings and sign-ins (cookies) are kept.").small().weak());
@@ -1287,7 +1287,7 @@ fn privacy_section(
             let count = crate::adblock::blocked_count();
             if count > 0 {
                 ui.add_space(4.0);
-                ui.label(RichText::new(format!("Blocked {count} requests since Pteron started.")).weak());
+                ui.label(RichText::new(format!("Blocked {count} requests since Sirocco started.")).weak());
             }
             ui.add_space(2.0);
             ui.label(RichText::new("If a page looks broken, turn this off and reload.").small().weak());
@@ -1297,7 +1297,7 @@ fn privacy_section(
         ui,
         "Bookmarks",
         Some(
-            "Move your bookmarks between browsers or computers. Export saves Pteron-bookmarks.html \
+            "Move your bookmarks between browsers or computers. Export saves Sirocco-bookmarks.html \
              on the Desktop. To import, export a bookmark file from Chrome, Edge or Firefox into \
              Downloads or the Desktop, then press Import.",
         ),
@@ -1346,7 +1346,7 @@ fn updates_card(ui: &mut egui::Ui, pending: &mut Vec<PageAction>) {
         card(
             ui,
             "Updates",
-            Some("Pteron updates itself on Windows. On this system, update it the way you installed it."),
+            Some("Sirocco updates itself on Windows. On this system, update it the way you installed it."),
             "update updates upgrade version check new",
             |_| {},
         );
@@ -1360,7 +1360,7 @@ fn updates_card(ui: &mut egui::Ui, pending: &mut Vec<PageAction>) {
     card(
         ui,
         "Updates",
-        Some("Pteron looks for new versions on GitHub when you open this page. Nothing is installed without your say-so."),
+        Some("Sirocco looks for new versions on GitHub when you open this page. Nothing is installed without your say-so."),
         "update updates upgrade version check new download install",
         |ui| {
             if let Some(error) = LAST_ERROR.get_or_init(updater::take_last_error) {
@@ -1401,7 +1401,7 @@ fn updates_card(ui: &mut egui::Ui, pending: &mut Vec<PageAction>) {
                 },
                 updater::Status::Ready(_) => {
                     ui.label(RichText::new("The update is downloaded and checked.").strong());
-                    ui.label("Pteron will close, install it and open again. Your tabs come back.");
+                    ui.label("Sirocco will close, install it and open again. Your tabs come back.");
                     ui.add_space(8.0);
                     if ui.button("Restart and update").clicked() {
                         pending.push(PageAction::InstallUpdate);
@@ -1448,7 +1448,7 @@ fn about_section(
     card(
         ui,
         "Report a problem",
-        Some("Saves a small file on your Desktop (versions, your computer, your settings and the newest log). Pteron sends nothing by itself: you send the file to whoever gave you Pteron."),
+        Some("Saves a small file on your Desktop (versions, your computer, your settings and the newest log). Sirocco sends nothing by itself: you send the file to whoever gave you Sirocco."),
         "report problem bug feedback issue help known",
         |ui| {
             ui.label("What went wrong? (optional)");
@@ -1491,7 +1491,7 @@ fn about_section(
     reset
 }
 
-// ---------------------------------------------------------------- Pteron: customization
+// ---------------------------------------------------------------- Sirocco: customization
 
 /// Edit every colour of the custom theme, starting from any theme.
 fn theme_editor(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
@@ -1644,7 +1644,7 @@ fn layout_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
         ui,
         "Browser layout",
         Some(
-            "Make Pteron look like the browser you are used to. Choosing a layout also picks matching \
+            "Make Sirocco look like the browser you are used to. Choosing a layout also picks matching \
              colours and corners; you can change them afterwards.",
         ),
         "layout style chrome firefox opera gx gaming tabs top sidebar browser look design",
@@ -1670,7 +1670,7 @@ fn layout_section(ui: &mut egui::Ui, settings: &mut pteron::Settings) -> bool {
             ui.add_space(8.0);
             changed |= ui
                 .checkbox(&mut settings.look.system_titlebar, "Use the system's title bar")
-                .on_hover_text("Off: Pteron draws the top of its window itself, with the tabs (or the sidebar) holding the window's buttons")
+                .on_hover_text("Off: Sirocco draws the top of its window itself, with the tabs (or the sidebar) holding the window's buttons")
                 .changed();
         },
     );

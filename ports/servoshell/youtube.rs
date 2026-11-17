@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: YouTube in Pteron's own pages.
+//! Sirocco: YouTube in Sirocco's own pages.
 //!
 //! YouTube's own website needs Media Source Extensions, which Servo does not have yet. Instead,
 //! a link to a YouTube video, search or channel is turned into a small local page:
@@ -32,7 +32,7 @@ use crate::streamproxy;
 
 const FRAGMENT_DIRECT: &str = "pteron-direct";
 
-/// Something Pteron shows itself instead of the real YouTube page.
+/// Something Sirocco shows itself instead of the real YouTube page.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Request {
     /// A video, by id.
@@ -72,10 +72,10 @@ fn fnv(text: &str) -> u64 {
     hash
 }
 
-/// What Pteron should do with a navigation.
+/// What Sirocco should do with a navigation.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Action {
-    /// The Pteron YouTube start page.
+    /// The Sirocco YouTube start page.
     Home,
     Open(Request),
     /// Plume Music, optionally opened on a playlist or album.
@@ -132,7 +132,7 @@ fn channel_path(path: &str) -> Option<String> {
     (clean && name.len() <= 100).then(|| format!("/{name}"))
 }
 
-/// Decide whether a navigation is for YouTube (or one of Pteron's own links on the
+/// Decide whether a navigation is for YouTube (or one of Sirocco's own links on the
 /// generated pages).
 pub(crate) fn classify(url: &Url) -> Option<Action> {
     if !matches!(url.scheme(), "http" | "https") {
@@ -861,7 +861,7 @@ fn page_with(title: &str, query: &str, focus: bool, body: &str, refresh: bool) -
 }
 
 /// Escape `text` and turn `http(s)://...` words into links. Links go through the normal
-/// navigation, so YouTube links open in Plume and everything else in Pteron.
+/// navigation, so YouTube links open in Plume and everything else in Sirocco.
 fn linkify(text: &str) -> String {
     let safe = esc(text);
     let mut out = String::with_capacity(safe.len() + 64);
@@ -919,7 +919,7 @@ fn direct_link(request: &Request) -> String {
     )
 }
 
-/// The page shown while Pteron works. It asks the local helper whether the real page is ready
+/// The page shown while Sirocco works. It asks the local helper whether the real page is ready
 /// and reloads exactly once when it is, so nothing flashes.
 pub(crate) fn loading_html(message: &str, key: &str) -> String {
     let body = format!(
@@ -1216,7 +1216,7 @@ fn subscriptions_section(count: usize, plume: &str) -> String {
     let feed = if count == 0 {
         "<p class=\"meta\" id=\"subl\">Follow channels with the Subscribe button on a video or channel page, \
          or import your list from YouTube (Google Takeout's subscriptions.csv) or another app (OPML). \
-         No account is used: Pteron reads each channel's public feed.</p>"
+         No account is used: Sirocco reads each channel's public feed.</p>"
             .to_string()
     } else {
         format!("<p class=\"meta\" id=\"subl\">Loading the newest videos of {count} channel{}...</p><div class=\"grid\" id=\"g-subs\"></div>", if count == 1 { "" } else { "s" })
@@ -1359,7 +1359,7 @@ fn default_index(choices: &[Choice]) -> usize {
 /// the helper (in the background) for the whole file, and swaps to it at the current position
 /// when it is ready. Changing quality works the same way.
 const PLAYER_EXTRA_JS: &str = r#"
-// ---- Pteron 68: up next, autoplay, loop, subscribe, chapters, SponsorBlock, subtitles
+// ---- Sirocco 68: up next, autoplay, loop, subscribe, chapters, SponsorBlock, subtitles
 var PL=PX.plume||'',prefs={autonext:false,loop:false,captions:''},firstNext=null,segs=[];
 function pl(x,cb){if(!PL){if(cb)cb('');return;}var r=new XMLHttpRequest();r.open('GET',PL+'?x='+encodeURIComponent(x));r.onload=function(){if(cb)cb(r.responseText);};r.onerror=function(){if(cb)cb('');};r.send();}
 (function(){var box=document.getElementById('nx'),l=document.getElementById('nxl');if(!box)return;
@@ -1572,7 +1572,7 @@ function qdraw(){
 qb.onclick=function(x){x.stopPropagation();qm.style.display=qm.style.display==='none'?'block':'none';};
 document.addEventListener('click',function(){qm.style.display='none';});
 qdraw();
-// ---- Pteron: speed, theater mode, watch later, history and resume
+// ---- Sirocco: speed, theater mode, watch later, history and resume
 var rate=1,told=false;
 function mem(p,cb){if(!MEM){if(cb)cb('');return;}var x=new XMLHttpRequest();x.open('GET',MEM+'?p='+encodeURIComponent(p));x.onload=function(){if(cb)cb(x.responseText);};x.onerror=function(){if(cb)cb('');};x.send();}
 function clock(s){s=Math.max(0,Math.floor(s||0));var m=Math.floor(s/60),r=s%60,h=Math.floor(m/60);m=m%60;return h?h+':'+(m<10?'0':'')+m+':'+(r<10?'0':'')+r:m+':'+(r<10?'0':'')+r;}
@@ -1810,7 +1810,7 @@ fn video_page(id: &str) -> String {
         Err(message) => return error_html(&request, &message),
     };
     let Some(proxy) = streamproxy::global() else {
-        return error_html(&request, "Pteron could not start its local video helper.");
+        return error_html(&request, "Sirocco could not start its local video helper.");
     };
     let token = proxy.register(info.set.clone());
     // Long videos start from their first couple of minutes (ready almost at once); the page
@@ -1844,7 +1844,7 @@ fn video_page(id: &str) -> String {
         ));
         if let Err(message) = result {
             crate::crashlog::note(&format!("video helper: could not prepare {id}: {message}"));
-            return error_html(&request, &format!("Pteron could not prepare this video: {message}"));
+            return error_html(&request, &format!("Sirocco could not prepare this video: {message}"));
         }
     }
     player_html(id, &info, &choices)

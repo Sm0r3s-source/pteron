@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: browsing history and bookmarks. Both are small JSON files next to the
+//! Sirocco: browsing history and bookmarks. Both are small JSON files next to the
 //! settings (`history.json`, `bookmarks.json`), kept in memory while the app runs.
 
 use std::path::PathBuf;
@@ -521,7 +521,7 @@ pub(crate) fn bookmarks_to_html(list: &[Bookmark]) -> String {
     out
 }
 
-/// Reads the links out of a bookmark file from Chrome, Edge, Firefox or Pteron.
+/// Reads the links out of a bookmark file from Chrome, Edge, Firefox or Sirocco.
 /// A link keeps the name of the folder it was in; the browsers' own top folders
 /// (bookmarks bar, other bookmarks) count as "no folder".
 pub(crate) fn parse_bookmarks_html(text: &str) -> Vec<Bookmark> {
@@ -629,7 +629,7 @@ pub(crate) fn export_bookmarks() -> Result<PathBuf, String> {
     let dir = ::dirs::desktop_dir()
         .or_else(::dirs::home_dir)
         .ok_or_else(|| "Could not find the Desktop folder.".to_string())?;
-    let path = dir.join("Pteron-bookmarks.html");
+    let path = dir.join("Sirocco-bookmarks.html");
     std::fs::write(&path, bookmarks_to_html(&list)).map_err(|e| format!("Could not save the file: {e}"))?;
     Ok(path)
 }
@@ -738,7 +738,7 @@ pub(crate) fn suggest(query: &str, limit: usize) -> Vec<Suggestion> {
 }
 
 /// Pages for the new tab page: bookmarks first, then the most visited pages.
-/// Titles of Pteron's own error pages: never worth suggesting.
+/// Titles of Sirocco's own error pages: never worth suggesting.
 fn is_error_title(title: &str) -> bool {
     matches!(
         title,

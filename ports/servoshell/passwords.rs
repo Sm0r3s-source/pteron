@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: saved logins.
+//! Sirocco: saved logins.
 //!
 //! A small script runs in every top-level page. When a login form is sent it reports the user
 //! name and password through the page console; this module catches that message (it never
@@ -11,10 +11,10 @@
 //! filled without a click.
 //!
 //! Passwords are encrypted before they touch the disk. On Windows with Windows' own protection
-//! (DPAPI, tied to this Windows account), in `%APPDATA%\Pteron\passwords.json`. On Linux with
+//! (DPAPI, tied to this Windows account), in `%APPDATA%\Sirocco\passwords.json`. On Linux with
 //! AES-256-GCM, under a random key kept in the system keyring (GNOME Keyring / KWallet, through
 //! `secret-tool`), or, where there is no keyring, in a key file only your account can read
-//! (`~/.config/Pteron/passwords.key`). Passwords are never synced and never put in problem
+//! (`~/.config/Sirocco/passwords.key`). Passwords are never synced and never put in problem
 //! reports.
 
 use crate::locks::LockExt;
@@ -397,7 +397,7 @@ mod keystore {
     }
 
     fn into_keyring(key: &[u8; 32]) -> bool {
-        let mut args = vec!["store", "--label=Pteron saved passwords"];
+        let mut args = vec!["store", "--label=Sirocco saved passwords"];
         args.extend(ATTRIBUTES);
         secret_tool(&args, Some(&crate::util::b64_encode(key))).is_some() && from_keyring() == Some(*key)
     }
@@ -440,7 +440,7 @@ mod keystore {
                 let mut key = [0u8; 32];
                 ring::rand::SystemRandom::new().fill(&mut key).map_err(|_| "No random numbers.".to_string())?;
                 if !into_keyring(&key) && !into_file(&key) {
-                    return Err("Pteron could not keep a key for your saved passwords (no keyring, and the settings folder is not writable).".into());
+                    return Err("Sirocco could not keep a key for your saved passwords (no keyring, and the settings folder is not writable).".into());
                 }
                 key
             },
@@ -684,7 +684,7 @@ fn confirm_user(ask: bool, host: &str) -> Result<(), String> {
     if !ask || CONFIRMED.lock_ok().is_some_and(|at| at.elapsed() < Duration::from_secs(300)) {
         return Ok(());
     }
-    windows_hello(&format!("Pteron: fill your saved password for {host}"))?;
+    windows_hello(&format!("Sirocco: fill your saved password for {host}"))?;
     *CONFIRMED.lock_ok() = Some(Instant::now());
     Ok(())
 }
@@ -720,8 +720,8 @@ fn windows_hello(message: &str) -> Result<(), String> {
     match answer.as_str() {
         "result:Verified" => Ok(()),
         a if a.starts_with("unavailable:") => Err(
-            "Windows Hello (a PIN, fingerprint or face) is not set up, so Pteron cannot ask it is you. \
-             Set it up in Windows Settings, or switch the question off in Pteron's password settings."
+            "Windows Hello (a PIN, fingerprint or face) is not set up, so Sirocco cannot ask it is you. \
+             Set it up in Windows Settings, or switch the question off in Sirocco's password settings."
                 .into(),
         ),
         "result:Canceled" => Err("Not filled: Windows did not confirm it is you.".into()),

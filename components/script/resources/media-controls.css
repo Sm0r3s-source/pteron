@@ -1,4 +1,4 @@
-/* Pteron media controls: a slim dark bar with a gold accent, at the top of the video. */
+/* Sirocco media controls: a slim dark bar with a gold accent, at the top of the video. */
 
 button {
   display: inline-block;
@@ -26,8 +26,19 @@ button:hover {
 .root {
   display: block;
   position: relative;
+  height: 100%;
   min-height: 42px;
   min-width: 230px;
+}
+
+/* Servo 0.8 draws subtitles (video cues) here, over the whole video, under our bar. */
+.cue-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
 }
 
 .controls {
@@ -122,7 +133,7 @@ button:hover {
   opacity: 0;
 }
 
-/* Pteron: chapter lines and skipped parts on the seek bar, and the time under the mouse. */
+/* Sirocco: chapter lines and skipped parts on the seek bar, and the time under the mouse. */
 .marks {
   position: absolute;
   left: 0;
@@ -197,3 +208,20 @@ button:hover {
 .muted { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAFR0lEQVR42u1YTWhcVRQ+5743782bv8xkmjRpaWOiEbGUhpbiwoUG1ILduOrKhVLShaC2CC4qOm7EZQtqwZ+qG1FDu7OiqExWCiWVCtWaJpNJXpr5z/y89ybz8969x0VnSjLJTH8S0iI5cBeP+7j3u9853znnXoBt27Zt2zojIiQifFjBsYeZORkAYO6fyf7U/NRQk83NWHvDp56cnHQhopNNzBzqGxj8g7mUJzZrbQAAeSPxBgCIiHYmOXvMrarnVFUJA5C1md5hG4k3RBSFzPzJgM/3ve044WXLEogoPVCAROMSIoqJiQmpmNU/C3aHzljlMuecO4wx1kHdUqe4bMyzjgCJAJupos2QEY9x/dq17oMHhid8ft9YLptziEhqd9hIJMIQkRCRIyK180hjXoyPj2/MAwn938NWIXmjZmUpk4g5uVSccqk4ZZOzvGKkKZuMj65gBAEArl792Vtdzr8Ti012tSq8yVo+Ez+dnJ/e1zovrz5J3F0qhTSiAhmGefunrq4gAhDVK+KIpirnJJmFDNN0GGMdRHaFARwS6XR8xKOqX6mafyTo3/EoERwHAAkAnFseQSeVmDkRCvd8UDaMtzLJ2dcAYLzBqpCbeQwRnUwCTvbugLdzeeJe1X+barviICKQ5naHhBBgmpboDA4A4BABACgCitzhfaWlJIWCwVcziZi+cze+r+u6hoiV1M2p54L+wKfFfN5WFaWbCEuISE0WV23CGHhAlkOICLK8dv9arSaEIGwnhtbQAgAM9Q/OLc5NH+0Ken81DCPg83reyyVj+o7+vV8W0vERl+L+rlKtclVRXEbJHOvbO/xTk711RIJc2DYRkW3bNrUOAGCM4V1XCEQURCTvfmT4T8O0TqiqW7IdRzBJ/ngpE3+RCzrPJAz7vF6pvLx8tm/v8BcNb4p1VXxLbNhMwGvsfkSFiA4RuXbtefyCaZRPdXWHJCGEW5GVS4B4UPN4wbSsiz39Q6eIyAUAfFNL3V2CtCkalXt3D57NZ3NnNE0T1VrNdquqMErF38wKjDXU7LSmoi3rQK74/QgA4NjOX4gIiOhIsox23YkNDAwUAEBaL0/KWwGuEVf24vyN50Oh4NemZYmA368ZpgHh3p4T6cVYChEjRORCRHtLGSQiCRGdlB7bHwz4v61Uq5wxxkol40MgSJklQ/h8nneTN6deQUQ7Go3KHUodEREJABBEtN7g99rxICLX9Wvdmkf9RgCFPZpbEpx/1LNr6LQAeNPlklm9bgufx/9JQo8dHh0ddVbW5FYGVab6mKqqis/rZa0jEPBLjUPQneFNIADg9evX/T7Vf8Hlkva73SoYRvliuG/wDV3/XevtHxo3jeVTwa6A5HDH7dFcP2QWZoYbXK1K1BwAgCP7HJzqL7VanWq1Oq6QIQNyCBBf8np9r1erVeKcC0TsECLPIgDQzrBnRFGUp9weH1hG6bJVu63YWrSh7Fw6/mQ4FBoTgnoLvHgUEc82GhB+zzG1lJobK5dSdjG3QJnE7J2aBQYAkF6YOlCvFX9M69OPrWwQVl6yCln9Uipx4+WO95tIJMIaC7cbMgBAenHmaTO/uFQ1M5RJxOx2ANe7m6z9hlUVYMN3mebGCwt/Dxv5xctkG5RNztbbAWwycqcr6a35tb0gu4+qwKPRqLxnz77pgrl0xDTN8XB3twsReTvxIKJoNK3UYV1CPMY3Lb+t7Hzz6bkz5WKSqlaGMonZZ1oZfNAvCRIAQC45d7xeLVAuPfvCZgLcUKlruIw3Stn51M2peYlJxRX94PbTxz2DfGgfj7Zt2/6v9h9Z55I1JLBtswAAAABJRU5ErkJggg=="); }
 .fullscreen { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAADM0lEQVR42u1YTW8bRRh+nvFGcRJ7XdWhbtMDUqCHHir1ADlx4MAF/gP5ET2gHpDoCcGZI7f8DiRuoEogwbGH2qStHKf2Nv5cf+3Ow8FrlIbdtZvYDkJ+pdVIszPzPvPMO/N+AGv5nwuTfkgyAMyc64hkeGE+09b/FxDSzo06ArdSkeTE9Ttx4EjakxfPDm7f2fvC8+oBYGIBW2vlujl2e92/dkv7RxFrhmR4Wi0f7t68+eWbMy8EmEngLSwU8k673fmN5GOSkJQMcMpc/aTyaW5n+3s4GwfFYhEw8esrDMCNAjqdzp8AjqIjJQAY4qHZLHy2eysDGCeBNwvAgJ3uA+/0+GwQ1H+4e/cjXxJJKo5BQzJo1CqfZ/OFg/rJK580/UT7kMK8O84Yw/L5XgCwwh922PopiUECFCAI7+fyuXt+z/8uDLM/AvBTjzia3kEwtsZk/LEGH4+G41ahUECr1XprlOvm1R/7DLAzvmjopb39o4jVVHlzevw4u739ba/brUlWM21wyiQMDQA1m553//4nnUsY/axb7AAIvNPjTQAE6cQDmSE7Ozc2JFGSidrYL+bZEEmb9AGYtsKMXcxgwoqkJGFquKsUg/+4rAEuBaAxxkIKobf961IAzNAVCzAM7RYyuQxgb5CGywQ4S9fFWywAoOEzhJ2fBTR7veZ4WfHBCnWtOB487wXeKU67XJiVqstJuTyc9cov8KKuStfyo1oCQKNaPpT6TxrV8uH5/mvX9U/AWis/laR6rfx0WSnAvLpMwuwzoB9M2qUfW6quBGaYAegk5xILfUhSda2DhTXA6xZnhh9klPEbSXbBpQ8jCV6twksAlAVgQYxIBpe6m5P8Jc192ck7WAkm4+IJSGLQBWBk9eHravkbM6l8aLGlj8j9Wj0IR0MaQ3cegJLERq3yq99u7uXyuXvZra0nYPxpXb30IWg0gt/vjwTzS7RBJQKM0kvnvTv7j15Xn78qFotfe/XGICmpvkrpY1o8ct38xmDg/757+4OvpoWreeJBA7zcBPKbzWYT7XYndpzr5kUaDofZcalU6l7VN8fFg0vLNxZVwEypsILvEkNeR9VhLfPI30BEAhRdvFgxAAAAAElFTkSuQmCC"); }
 .fullscreen.fullscreen-active { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAADmUlEQVR42u1YTW8bVRQ9572ZsR3PJE5QumDBhkgoiUBiwSKrkAXNoisqpuLfWNmz4w9ApQo0UdlCuyC1AHWVTUscVaKCFRKJQeDYnjjz5l0Wjis3/shM4qoE5aws+TzNmftx7n0DXOM1QQQUAafFu7K40JvJzrrz9Hc/AIB332wdcaNmLsObBJVLWBRqAKg3imt+Gc/9Mp7XG8W1wf/y8LLAuUgEtbKuozkPADq17mV5UxcoQkmMSP/3ZXlTFwgAZLb6zcqbSg2+DvznBY5McRSFOhxT9xKFeKaPVP6SkJ5hPzoYa9wkJJPAO3e20zHPSQFgb/ujFl0NOX1wFoGpwPQE5PNCZ5S51hvFNY/aMca8xKAoJbRWLN9PrUApAoLueD/qda70amnuyb1b8wslV/0VJ3aQFsw4olzDt8rDZu4MzkwS8viXwmylggeFgiop7YID8REAhEZqBcdJ2q34ru50uQLgJyweDEXSpnCUB2l3TEKlvtSuMU1joM84Ynxi7Ixy1N5h6TaAHyUKNU+zmMtm+MKACb/kFmbLLprtJBgihisCAErSvxVdLsx5HklPqdHVYFNBUHYQH7TL587iSSkGAFpNsalQ8W1LBn/8HH++sTVcV/2MPP1q83bFd9476pgUJMc4usyUNOM0vbv88YPf+mev7jYzwWZe4NFpzW2cs6FIFOpR9TkSH9bSKxO5q72wZklxv1vJLTsxxdWq2l6tMwy3bYbFYvrpnXTfmMZdxMlrMwBgDBCUNJut9B/y4e44cSRk9+7NpVnfW2xR7+uOGSl4apOkD88RCIi5WY39r29+svzpw/uD7i/VqgK2ZD/afMdx1GOt7LzXNX/SFdufSK9kkgyiE5uThYrnNcEPANx/yUpW6yRh699gQStW4mOTBmXvjWJBQwRDLz1pkjhnC3RtqdusN4qb3a4dXhasUBQltQyUwhckXU3VHm6eXkM029yTQtoIfG/xqGO+b8WmRooSoT07SY4TQ2g8Gzw/MoKnNfDDpOjtVNedGyulRJHEhHVrRmkNGJQKGu3YfLscfvdZxmuCXGxhXTwgDm/IbhJXwIQ5Oh2w9GVn3Tl9psk6SXItrP1GenLvVprbjiiWGzUjO+vIc4G/vjRdC5wAKyIW538xyMqbnkDVSQhB4JdcBaJwWd7UPn30LWB1qdvcOyxtdk4Sl679tW8ReXn/C+iLHoyiUEfhqsJKnbXa+D0uK+8arwr/AusS8feDjY1jAAAAAElFTkSuQmCC"); }
+
+/* https://w3c.github.io/webvtt/#applying-css-properties */
+.cue-container > span {
+  position: absolute;
+  unicode-bidi: plaintext;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+  font: 5vh sans-serif;
+  color: rgba(255, 255, 255, 1);
+  background: rgba(0, 0, 0, 0.8);
+  white-space: pre-line;
+}
+
+.cue-container > span > * {
+  position: relative;
+  width: auto;
+}

@@ -76,7 +76,7 @@ var box=document.createElement('div');box.id='__pteron_check_box';
 box.style.cssText='position:fixed;z-index:2147483647;top:12px;left:12px;right:12px;max-height:80vh;overflow:auto;background:#1b1b22;color:#eee;border:1px solid #6c6cff;border-radius:10px;padding:12px;font:12px/1.4 monospace;white-space:pre-wrap;word-break:break-word;text-align:left';
 var pre=document.createElement('div');pre.textContent=text;
 var x=document.createElement('button');x.textContent='Close';x.style.cssText='float:right;margin-left:8px';x.onclick=function(){box.remove();};
-var note=document.createElement('div');note.textContent='Saved to the Pteron crash log too. Send me this text.';note.style.cssText='color:#9aa;margin-bottom:6px';
+var note=document.createElement('div');note.textContent='Saved to the Sirocco crash log too. Send me this text.';note.style.cssText='color:#9aa;margin-bottom:6px';
 box.appendChild(x);box.appendChild(note);box.appendChild(pre);
 (document.body||document.documentElement).appendChild(box);
 }

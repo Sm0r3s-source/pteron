@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: a small client for YouTube's own app interface ("InnerTube"), the same interface
+//! Sirocco: a small client for YouTube's own app interface ("InnerTube"), the same interface
 //! the YouTube apps and tools like FreeTube use. No account is used and nothing is stored.
 //!
 //! * Video streams: the `visionos` client, which needs no JavaScript and no proof-of-work token.
@@ -56,8 +56,8 @@ pub(crate) fn changed_notice() -> Option<String> {
         let mut what: Vec<&str> = list.iter().map(|(w, _)| *w).collect();
         what.dedup();
         format!(
-            "YouTube seems to have changed something Plume relies on ({}). Check for a Pteron update; \
-             until then some videos or lists may not load. The details are in Pteron's notes file.",
+            "YouTube seems to have changed something Plume relies on ({}). Check for a Sirocco update; \
+             until then some videos or lists may not load. The details are in Sirocco's notes file.",
             what.join(", ")
         )
     })
@@ -180,7 +180,7 @@ fn post_raw(endpoint: &str, mut body: Value, client: Client, visitor: Option<&st
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|e| format!("Could not start curl: {e}. Pteron needs Windows 10 or later."))?;
+        .map_err(|e| format!("Could not start curl: {e}. Sirocco needs Windows 10 or later."))?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(body.to_string().as_bytes());
     }
@@ -446,7 +446,7 @@ pub(crate) fn parse_player(v: &Value) -> Result<PlayerInfo, String> {
     }
     let details = v.get("videoDetails").cloned().unwrap_or(Value::Null);
     if details.get("isLive").and_then(|b| b.as_bool()) == Some(true) {
-        return Err("This is a live stream. Pteron cannot play live streams yet.".into());
+        return Err("This is a live stream. Sirocco cannot play live streams yet.".into());
     }
     let formats = v
         .pointer("/streamingData/adaptiveFormats")
@@ -551,7 +551,7 @@ pub(crate) fn parse_player(v: &Value) -> Result<PlayerInfo, String> {
 
 static VISITOR: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
 
-/// A visitor id for this run of Pteron, fetched once and renewed every hour.
+/// A visitor id for this run of Sirocco, fetched once and renewed every hour.
 fn visitor() -> Option<String> {
     let mut cache = VISITOR.lock().ok()?;
     if let Some((id, when)) = cache.as_ref() {
@@ -604,7 +604,7 @@ fn player_uncached(video_id: &str) -> Result<PlayerInfo, String> {
         match post_with("player", body, client, visitor.as_deref()).and_then(|answer| parse_player(&answer)) {
             Ok(info) => return Ok(info),
             Err(message) => {
-                warn!("Pteron: {client:?} could not play {video_id}: {message}");
+                warn!("Sirocco: {client:?} could not play {video_id}: {message}");
                 all_errors.push(format!("{client:?}: {}", message.chars().take(120).collect::<String>()));
                 first_error.get_or_insert(message);
             },
@@ -776,7 +776,7 @@ pub(crate) fn search(query: &str, params: &str) -> Result<(Vec<VideoItem>, Optio
     let items = parse_videos(&answer, 40);
     if search_shape_changed(&answer, items.len()) {
         note_changed("search results");
-        return Err("YouTube answered the search in a form this version of Pteron does not understand.".into());
+        return Err("YouTube answered the search in a form this version of Sirocco does not understand.".into());
     }
     Ok((items, continuation_token(&answer)))
 }
@@ -1201,7 +1201,7 @@ mod tests {
         assert!(!search_shape_changed(&json!({"contents": {}}), 0));
         note_changed("test one");
         note_changed("test two");
-        assert!(changed_notice().is_some_and(|t| t.contains("Check for a Pteron update")));
+        assert!(changed_notice().is_some_and(|t| t.contains("Check for a Sirocco update")));
     }
 
     #[test]
@@ -1391,7 +1391,7 @@ pub(crate) fn playlist(id: &str) -> Result<Playlist, String> {
     let answer = post("browse", json!({"browseId": format!("VL{id}")}), Client::Web)?;
     let list = parse_playlist(&answer);
     if list.items.is_empty() {
-        return Err("This playlist has no videos Pteron can play.".into());
+        return Err("This playlist has no videos Sirocco can play.".into());
     }
     Ok(list)
 }

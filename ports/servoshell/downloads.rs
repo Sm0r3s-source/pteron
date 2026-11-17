@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: file downloads.
+//! Sirocco: file downloads.
 //!
 //! Servo itself has no download support, so the shell catches navigations to links that
 //! point at files (by extension), cancels the navigation, and downloads the file in the
@@ -35,7 +35,7 @@ const DOWNLOAD_EXTENSIONS: &[&str] = &[
 ];
 
 /// Extensions that can run code. They need an extra confirmation and are never opened
-/// from Pteron.
+/// from Sirocco.
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "exe", "msi", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "bat", "cmd", "com", "pif",
     "cpl", "msc", "ps1", "psm1", "psd1", "ps1xml", "vbs", "vbe", "js", "jse", "wsf", "wsh", "wsc", "ws",
@@ -201,7 +201,7 @@ fn download_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Pteron: where a picture of a page (from "Take screenshot") goes: a new PNG file in the
+/// Sirocco: where a picture of a page (from "Take screenshot") goes: a new PNG file in the
 /// Pictures folder (or Downloads), named after the page and the date.
 pub(crate) fn screenshot_path(title: &str) -> PathBuf {
     let dir = dirs::picture_dir().unwrap_or_else(download_dir);
@@ -283,7 +283,7 @@ fn begin_named(url: &str, name: String, convert: Option<crate::mp3::Tags>) {
         return;
     }
     let dangerous = is_dangerous(&name);
-    // Pteron: programs only over https; over plain http anyone on the network could swap them.
+    // Sirocco: programs only over https; over plain http anyone on the network could swap them.
     // (Your own network, such as a NAS, is fine.)
     let insecure = url.starts_with("http://") && !Url::parse(url).is_ok_and(|u| crate::privacy::is_private_address(&u));
     if dangerous && insecure {
@@ -321,7 +321,7 @@ fn begin_named(url: &str, name: String, convert: Option<crate::mp3::Tags>) {
     }
 }
 
-/// Pteron: one click may start a few downloads, not hundreds (at most 3 in 10 seconds from pages).
+/// Sirocco: one click may start a few downloads, not hundreds (at most 3 in 10 seconds from pages).
 pub(crate) fn page_may_download() -> bool {
     static RECENT: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
     let mut recent = RECENT.lock_ok();
@@ -449,7 +449,7 @@ pub(crate) fn open_file(item: &Item) {
     }
 }
 
-/// Opens a web address in the computer's default browser (for sites that Pteron cannot get
+/// Opens a web address in the computer's default browser (for sites that Sirocco cannot get
 /// into, such as pages that insist on a browser check).
 pub(crate) fn open_in_default_browser(url: &str) {
     if !(url.starts_with("http://") || url.starts_with("https://")) || url.chars().any(|c| c.is_control() || c == ' ') {
@@ -551,7 +551,7 @@ fn run(id: u64, url: String, part: PathBuf, cancel: Arc<AtomicBool>) {
             "--connect-timeout",
             "20",
             "-A",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Pteron/0.1",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Sirocco/0.1",
             "-o",
         ])
         .arg(&part)

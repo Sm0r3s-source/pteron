@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: find in page (Ctrl+F). The bar is drawn by the GUI; the searching is a small script
+//! Sirocco: find in page (Ctrl+F). The bar is drawn by the GUI; the searching is a small script
 //! that runs inside the page, highlights the matches and scrolls to the current one.
 
 use std::sync::{Mutex, OnceLock};

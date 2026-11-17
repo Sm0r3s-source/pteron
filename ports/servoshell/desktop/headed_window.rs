@@ -47,7 +47,7 @@ use super::geometry::{winit_position_to_euclid_point, winit_size_to_euclid_size}
 use super::keyutils::{CMD_OR_ALT, keyboard_event_from_winit};
 use crate::desktop::accelerated_gl_media::setup_gl_accelerated_media;
 use crate::desktop::dialog::Dialog;
-use crate::desktop::event_loop::AppEvent;
+use crate::desktop::event_loop::{AppEvent, RepaintEventLoopWaker};
 use crate::desktop::gui::Gui;
 use crate::desktop::keyutils::CMD_OR_CONTROL;
 use crate::desktop::sidebar;
@@ -58,9 +58,11 @@ use crate::window::{
     ServoShellWindowId, TopLevelWebViewCreationRequest,
 };
 
-pub(crate) const INITIAL_WINDOW_TITLE: &str = "Pteron";
+pub(crate) const INITIAL_WINDOW_TITLE: &str = "Sirocco";
 
 pub struct HeadedWindow {
+    /// The [`EventLoopProxy`] for this [`HeadedWindow`].
+    event_loop_proxy: EventLoopProxy<AppEvent>,
     /// The egui interface that is responsible for showing the user interface elements of
     /// this headed `Window`.
     gui: RefCell<Gui>,
@@ -71,11 +73,11 @@ pub struct HeadedWindow {
     inner_size: Cell<PhysicalSize<u32>>,
     fullscreen: Cell<bool>,
     fullscreen_from_document: Cell<bool>,
-    /// Pteron: the window system says the window is completely covered.
+    /// Sirocco: the window system says the window is completely covered.
     occluded: Cell<bool>,
-    /// Pteron: the tab whose page had the mouse last (split view has two pages on screen).
+    /// Sirocco: the tab whose page had the mouse last (split view has two pages on screen).
     pointer_webview: Cell<Option<WebViewId>>,
-    /// Pteron: the mouse is over the window's edge and shows a resize pointer.
+    /// Sirocco: the mouse is over the window's edge and shows a resize pointer.
     resize_pointer: Cell<bool>,
     device_pixel_ratio_override: Option<f32>,
     xr_window_poses: RefCell<Vec<Rc<XRWindowPose>>>,
@@ -103,7 +105,7 @@ pub struct HeadedWindow {
     last_title: RefCell<String>,
     /// The current set of open dialogs.
     dialogs: RefCell<HashMap<WebViewId, Vec<Dialog>>>,
-    /// Pteron: how many alert/confirm/prompt boxes each tab has shown, and whether the user said
+    /// Sirocco: how many alert/confirm/prompt boxes each tab has shown, and whether the user said
     /// "no more" (a page that opens box after box cannot lock the window).
     page_dialogs: RefCell<HashMap<WebViewId, (u32, Rc<Cell<bool>>)>>,
     /// The [`EmbedderControlId`] of the currently showing [`InputMethod`] interfaces,
@@ -138,7 +140,7 @@ impl HeadedWindow {
 
         // Set a name so it can be pinned to taskbars in Linux.
         #[cfg(target_os = "linux")]
-        let window_attr = window_attr.with_name("org.pteron.Pteron", "Pteron");
+        let window_attr = window_attr.with_name("org.pteron.Sirocco", "Sirocco");
 
         #[allow(deprecated)]
         let winit_window = event_loop
@@ -197,13 +199,14 @@ impl HeadedWindow {
         let gui = RefCell::new(Gui::new(
             &winit_window,
             event_loop,
-            event_loop_proxy,
+            event_loop_proxy.clone(),
             rendering_context.clone(),
             initial_url,
         ));
 
         debug!("Created window {:?}", winit_window.id());
         Rc::new(HeadedWindow {
+            event_loop_proxy,
             gui,
             winit_window,
             webview_relative_mouse_point: Cell::new(Point2D::zero()),
@@ -517,7 +520,7 @@ impl HeadedWindow {
         dialogs.contains_key(&webview_id)
     }
 
-    /// Pteron: is this key press the "focus the address bar" shortcut?
+    /// Sirocco: is this key press the "focus the address bar" shortcut?
     fn is_focus_location_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
         if event.state != ElementState::Pressed {
             return false;
@@ -531,7 +534,7 @@ impl HeadedWindow {
             (text == "d" && modifiers.alt_key() && !cfg!(target_os = "macos"))
     }
 
-    /// Pteron: is this key press Ctrl+Shift+T (reopen the last closed tab)?
+    /// Sirocco: is this key press Ctrl+Shift+T (reopen the last closed tab)?
     fn is_reopen_tab_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
         if event.state != ElementState::Pressed {
             return false;
@@ -545,7 +548,7 @@ impl HeadedWindow {
             !modifiers.alt_key()
     }
 
-    /// Pteron: is this key press Ctrl+H (browsing history)?
+    /// Sirocco: is this key press Ctrl+H (browsing history)?
     fn is_history_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
         if event.state != ElementState::Pressed {
             return false;
@@ -559,7 +562,7 @@ impl HeadedWindow {
             !modifiers.alt_key()
     }
 
-    /// Pteron: is this key press Ctrl+F (find in page)?
+    /// Sirocco: is this key press Ctrl+F (find in page)?
     fn is_find_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
         if event.state != ElementState::Pressed {
             return false;
@@ -580,7 +583,7 @@ impl HeadedWindow {
         window: Rc<ServoShellWindow>,
         event: WindowEvent,
     ) {
-        // Pteron: remember the last click / key press, for pop-up blocking.
+        // Sirocco: remember the last click / key press, for pop-up blocking.
         if matches!(
             event,
             WindowEvent::MouseInput {
@@ -660,7 +663,7 @@ impl HeadedWindow {
                 // the GUI, and present the new frame.
                 self.winit_window.request_redraw();
             },
-            // Pteron: with its own window top, the outer edge of the window resizes it.
+            // Sirocco: with its own window top, the outer edge of the window resizes it.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
@@ -698,7 +701,7 @@ impl HeadedWindow {
             } if self.gui.borrow().sidebar_mode() &&
                 Self::is_focus_location_shortcut(key_event, self.modifiers_state.get()) =>
             {
-                // Pteron: Ctrl+L / Alt+D opens the sidebar and focuses the address bar.
+                // Sirocco: Ctrl+L / Alt+D opens the sidebar and focuses the address bar.
                 self.gui.borrow_mut().focus_location();
                 self.winit_window.request_redraw();
                 consumed = true;
@@ -707,7 +710,7 @@ impl HeadedWindow {
                 event: ref key_event,
                 ..
             } if Self::is_reopen_tab_shortcut(key_event, self.modifiers_state.get()) => {
-                // Pteron: Ctrl+Shift+T brings back the tab closed last.
+                // Sirocco: Ctrl+Shift+T brings back the tab closed last.
                 window.queue_user_interface_command(UserInterfaceCommand::ReopenClosedTab);
                 self.winit_window.request_redraw();
                 consumed = true;
@@ -716,7 +719,7 @@ impl HeadedWindow {
                 event: ref key_event,
                 ..
             } if Self::is_history_shortcut(key_event, self.modifiers_state.get()) => {
-                // Pteron: Ctrl+H opens the browsing history.
+                // Sirocco: Ctrl+H opens the browsing history.
                 if let Ok(url) = url::Url::parse("servo:history") {
                     window.queue_user_interface_command(UserInterfaceCommand::NewTabWithUrl(url));
                 }
@@ -729,7 +732,7 @@ impl HeadedWindow {
             } if self.gui.borrow().sidebar_mode() &&
                 Self::is_find_shortcut(key_event, self.modifiers_state.get()) =>
             {
-                // Pteron: Ctrl+F opens the find bar.
+                // Sirocco: Ctrl+F opens the find bar.
                 crate::find::open();
                 self.winit_window.request_redraw();
                 consumed = true;
@@ -754,7 +757,7 @@ impl HeadedWindow {
                     state.set_window_has_focus(window.clone(), *focused);
                 }
 
-                // Pteron: while the window is minimized or completely covered, slow the visible
+                // Sirocco: while the window is minimized or completely covered, slow the visible
                 // page down like a background tab (Windows reports minimizing, X11 and macOS
                 // also report being covered).
                 if let WindowEvent::Occluded(occluded) = event {
@@ -784,7 +787,7 @@ impl HeadedWindow {
             },
         }
 
-        // Pteron: the mouse pointer shows where the window can be resized.
+        // Sirocco: the mouse pointer shows where the window can be resized.
         if let WindowEvent::CursorMoved { .. } = event {
             use winit::window::{CursorIcon, ResizeDirection};
             let direction = self.resize_direction();
@@ -802,7 +805,7 @@ impl HeadedWindow {
         }
 
         if !consumed && let Some(mut webview) = window.active_webview() {
-            // Pteron: in split view the mouse works on the page under it, and a click there
+            // Sirocco: in split view the mouse works on the page under it, and a click there
             // makes that page the active tab.
             let pointer_x = match event {
                 WindowEvent::CursorMoved { position, .. } => {
@@ -837,7 +840,7 @@ impl HeadedWindow {
                     self.modifiers_state.set(modifiers.state())
                 },
                 WindowEvent::MouseInput { state, button, .. } => {
-                    // Pteron: a click in the page means the window has focus. If the page
+                    // Sirocco: a click in the page means the window has focus. If the page
                     // still thinks it does not, it paints no typing cursor, so say it again.
                     if state == ElementState::Pressed && !webview.focused() {
                         crate::crashlog::note("focus: page was clicked while marked unfocused; re-focusing it");
@@ -896,7 +899,7 @@ impl HeadedWindow {
                     );
                 },
                 WindowEvent::CloseRequested => {
-                    // Pteron: "clear on exit" forgets history and empties the cache.
+                    // Sirocco: "clear on exit" forgets history and empties the cache.
                     if crate::pteron::settings().clear_on_exit {
                         crate::library::clear_history();
                         state.servo().network_manager().clear_cache();
@@ -904,7 +907,7 @@ impl HeadedWindow {
                     window.schedule_close();
                 },
                 WindowEvent::ThemeChanged(_) => {
-                    // Pteron: dark mode for pages may override the system's choice.
+                    // Sirocco: dark mode for pages may override the system's choice.
                     window.refresh_page_themes();
                 },
                 WindowEvent::Ime(ime) => match ime {
@@ -925,6 +928,12 @@ impl HeadedWindow {
                         )));
                     },
                     Ime::Commit(text) => {
+                        webview.notify_input_event(InputEvent::Ime(ImeEvent::Composition(
+                            servo::CompositionEvent {
+                                state: servo::CompositionState::Update,
+                                data: text.clone(),
+                            },
+                        )));
                         webview.notify_input_event(InputEvent::Ime(ImeEvent::Composition(
                             servo::CompositionEvent {
                                 state: servo::CompositionState::End,
@@ -992,8 +1001,8 @@ impl HeadedWindow {
         self.fullscreen_from_document.get()
     }
 
-    /// Pteron: where the mouse is, if that is an edge that resizes the window (only with
-    /// Pteron's own window top, and not while maximized or in full screen).
+    /// Sirocco: where the mouse is, if that is an edge that resizes the window (only with
+    /// Sirocco's own window top, and not while maximized or in full screen).
     fn resize_direction(&self) -> Option<winit::window::ResizeDirection> {
         if self.winit_window.is_maximized() || self.fullscreen.get() {
             return None;
@@ -1052,7 +1061,7 @@ impl PlatformWindow for HeadedWindow {
                     .filter(|title| !title.is_empty())
                     .or_else(|| webview.url().map(|url| url.to_string()))
             })
-            .map(|title| format!("{title} - Pteron"))
+            .map(|title| format!("{title} - Sirocco"))
             .unwrap_or_else(|| INITIAL_WINDOW_TITLE.to_string());
         if title != *self.last_title.borrow() {
             self.winit_window.set_title(&title);
@@ -1153,7 +1162,7 @@ impl PlatformWindow for HeadedWindow {
 
     fn set_cursor(&self, cursor: Cursor) {
         use winit::window::CursorIcon;
-        // Pteron: the window's edge shows the resize pointer, whatever the page under it says.
+        // Sirocco: the window's edge shows the resize pointer, whatever the page under it says.
         if self.resize_pointer.get() {
             return;
         }
@@ -1300,7 +1309,11 @@ impl PlatformWindow for HeadedWindow {
                 self.show_ime(control_id, input_method_control);
             },
             EmbedderControl::FilePicker(file_picker) => {
-                self.add_dialog(webview_id, Dialog::new_file_dialog(file_picker));
+                let waker = RepaintEventLoopWaker::new(self.event_loop_proxy.clone(), self.id());
+                self.add_dialog(
+                    webview_id,
+                    Dialog::new_file_dialog(file_picker, &self.winit_window, waker),
+                );
             },
             EmbedderControl::SimpleDialog(simple_dialog) => {
                 self.add_dialog(webview_id, Dialog::new_simple_dialog(simple_dialog, String::new(), None));
@@ -1366,7 +1379,7 @@ impl PlatformWindow for HeadedWindow {
     }
 
     fn show_console_message(&self, level: servo::ConsoleLogLevel, message: &str) {
-        // Pteron: a page's console output must never take the browser down when there is no
+        // Sirocco: a page's console output must never take the browser down when there is no
         // usable console (println! panics in that case).
         {
             use std::io::Write;
@@ -1581,7 +1594,7 @@ impl TouchEventSimulator {
     }
 }
 
-/// Pteron: change the page zoom and show the new level for a moment.
+/// Sirocco: change the page zoom and show the new level for a moment.
 fn zoom_by(webview: &WebView, step: f32) {
     let level = (webview.page_zoom() + step).clamp(0.25, 5.0);
     webview.set_page_zoom(level);

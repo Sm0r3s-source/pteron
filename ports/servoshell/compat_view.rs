@@ -1,5 +1,5 @@
 //! The compatibility tab: pages that Servo cannot handle (Cloudflare's browser check and
-//! similar) open in the system's own web engine inside a Pteron tab. This file holds the logic
+//! similar) open in the system's own web engine inside a Sirocco tab. This file holds the logic
 //! (when to switch, which sites are remembered, the placeholder page); `compat_host.rs` holds
 //! the embedded engine itself.
 
@@ -153,7 +153,7 @@ pub(crate) fn redirect(settings: &crate::pteron::Settings, url: &Url) -> Option<
         return None;
     }
     let host = url.host_str()?;
-    // The "never use Pteron's own engine" list always applies (claude.ai is on it), whatever the mode.
+    // The "never use Sirocco's own engine" list always applies (claude.ai is on it), whatever the mode.
     if site_listed(&settings.compat_tab_keep_sites, host) {
         return wrap(url);
     }

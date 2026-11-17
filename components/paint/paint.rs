@@ -728,7 +728,7 @@ impl Paint {
             .resize_rendering_context(new_size);
     }
 
-    /// Pteron: place a WebView inside its rendering context (see `Painter::set_webview_rect`).
+    /// Sirocco: place a WebView inside its rendering context (see `Painter::set_webview_rect`).
     pub fn set_webview_rect(&self, webview_id: WebViewId, rect: DeviceRect) {
         if self.shutdown_state() != ShutdownState::NotShuttingDown {
             return;

@@ -7,10 +7,10 @@
 h1{font-size:24px}.why{opacity:.75;font-size:14px;word-break:break-word}button{font-size:15px;padding:8px 16px}</style>
 </head>
 <body>
-  <!-- Pteron: no "allow anyway" here. That button needed a secret in this page, and a page of the
-       same site could read it and make Pteron trust any certificate. -->
+  <!-- Sirocco: no "allow anyway" here. That button needed a secret in this page, and a page of the
+       same site could read it and make Sirocco trust any certificate. -->
   <h1>This site's certificate is not valid</h1>
-  <p>Pteron did not open the page, because the connection to it cannot be trusted. Someone may be
+  <p>Sirocco did not open the page, because the connection to it cannot be trusted. Someone may be
   trying to read or change what you send to this site.</p>
   <p class="why">${reason}</p>
   <button id="leave" onclick="history.back()">Go back</button>

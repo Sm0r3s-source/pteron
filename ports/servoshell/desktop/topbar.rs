@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: top-tab layouts in the style of other browsers (Chrome, Firefox, Opera, Opera GX): a
+//! Sirocco: top-tab layouts in the style of other browsers (Chrome, Firefox, Opera, Opera GX): a
 //! strip of tabs, a toolbar with the address bar and a menu, an optional bookmarks bar and, for
 //! the Opera styles, a bar of shortcuts down the left side. It uses the sidebar's model and
 //! actions, so `gui.rs` handles both layouts the same way.
@@ -254,7 +254,7 @@ fn tab_strip(ui: &mut egui::Ui, style: Style, c: &Colors, model: &Model, look: &
         .frame(Frame::NONE.fill(c.strip))
         .show_inside(ui, |ui| {
             let full = ui.max_rect();
-            // Pteron's own window top: the strip moves the window, and holds its buttons.
+            // Sirocco's own window top: the strip moves the window, and holds its buttons.
             let mut right = full.max.x;
             if model.own_titlebar {
                 sidebar::drag_area(ui, full, actions);

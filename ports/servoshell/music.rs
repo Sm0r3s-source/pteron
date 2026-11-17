@@ -1,4 +1,4 @@
-/* Pteron: Plume Music. A separate, audio-only page for listening to music from YouTube:
+/* Sirocco: Plume Music. A separate, audio-only page for listening to music from YouTube:
  * search, playlists and albums, a queue that is remembered, and playback that continues while
  * other tabs are used. Nothing but the audio track of a video is downloaded.
  *
@@ -409,7 +409,7 @@ fn resolve_track(id: &str) -> Result<Value, String> {
     }
     let started = Instant::now();
     let info = innertube::player(id)?;
-    let proxy = streamproxy::global().ok_or("Pteron could not start its local helper.")?;
+    let proxy = streamproxy::global().ok_or("Sirocco could not start its local helper.")?;
     let set = streamproxy::VideoSet { videos: Vec::new(), audio: info.set.audio.clone(), duration_ms: info.set.duration_ms };
     let token = proxy.register(set);
     proxy.prepare(&token, AUDIO_ONLY, false)?;

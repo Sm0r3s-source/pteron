@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: keeps bookmarks and settings in step between computers through a folder the user
-//! picks (OneDrive, Google Drive, Dropbox, Syncthing ...). Pteron only reads and writes one
+//! Sirocco: keeps bookmarks and settings in step between computers through a folder the user
+//! picks (OneDrive, Google Drive, Dropbox, Syncthing ...). Sirocco only reads and writes one
 //! small file there, `Pteron-sync.json`; the folder's own app moves it between computers.
 //! Whichever side was changed last wins, for the bookmarks and for the settings separately.
 //! History, passwords and cookies are never synced.
@@ -179,7 +179,7 @@ fn read_remote(file: &Path) -> Result<Option<Snapshot>, String> {
     };
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "The sync file is not readable (it may still be uploading).".to_string())?;
-    from_json(&value).map(Some).ok_or_else(|| "The sync file is not a Pteron sync file.".to_string())
+    from_json(&value).map(Some).ok_or_else(|| "The sync file is not a Sirocco sync file.".to_string())
 }
 
 fn write_remote(file: &Path, snapshot: &Snapshot) -> Result<(), String> {
@@ -227,7 +227,7 @@ pub(crate) fn sync_now(allow_pull: bool) -> Result<String, String> {
             crate::pteron::apply_json(&mut updated, &only_synced(&remote.settings));
             crate::pteron::update(updated);
             set_modified(&settings_file, remote.settings_modified);
-            notes.push("settings updated (restart Pteron to see all of them)");
+            notes.push("settings updated (restart Sirocco to see all of them)");
         },
         Step::Push => push = true,
         Step::Nothing => {},
@@ -380,7 +380,7 @@ mod tests {
         std::fs::write(&file, "{ half a file").unwrap();
         assert!(read_remote(&file).unwrap_err().contains("not readable"));
         std::fs::write(&file, r#"{"app":"other"}"#).unwrap();
-        assert!(read_remote(&file).unwrap_err().contains("not a Pteron"));
+        assert!(read_remote(&file).unwrap_err().contains("not a Sirocco"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

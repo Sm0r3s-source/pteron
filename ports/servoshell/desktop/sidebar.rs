@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: a Zen-style vertical sidebar. It floats over the page (the page is never
+//! Sirocco: a Zen-style vertical sidebar. It floats over the page (the page is never
 //! shifted or resized) and slides in when the pointer touches the window edge (left or right).
 //! This module only knows about egui; `gui.rs` turns the returned [`Action`]s into
 //! servoshell commands.
@@ -99,7 +99,7 @@ pub(crate) struct Model {
     pub suggestions: Vec<crate::library::Suggestion>,
     /// With dark mode for pages on and a web page showing: whether it is dark here.
     pub dark_here: Option<bool>,
-    /// Pteron draws the window's own top: minimize, maximize and close buttons are needed.
+    /// Sirocco draws the window's own top: minimize, maximize and close buttons are needed.
     pub own_titlebar: bool,
 }
 
@@ -162,7 +162,7 @@ pub(crate) enum Action {
     Window(WindowAction),
 }
 
-/// What Pteron's own window top asks of the window.
+/// What Sirocco's own window top asks of the window.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum WindowAction {
     /// Start moving the window with the mouse.
@@ -173,7 +173,7 @@ pub(crate) enum WindowAction {
     Close,
 }
 
-/// An empty part of Pteron's own window top: drag it to move the window, double-click to
+/// An empty part of Sirocco's own window top: drag it to move the window, double-click to
 /// maximize. Call it before drawing what lies on top of it.
 pub(crate) fn drag_area(ui: &egui::Ui, rect: Rect, actions: &mut Vec<Action>) {
     let response = ui.interact(rect, Id::new("pteron_window_drag"), Sense::click_and_drag());
@@ -519,7 +519,7 @@ pub(crate) fn show(
         ui.memory_mut(|memory| memory.data.remove::<usize>(Id::new("pteron_bookmark_drag")));
     }
     // A steady, clearly visible typing cursor. (The blinking one needs timed repaints, which
-    // Pteron does not run while idle, so it could stay invisible.)
+    // Sirocco does not run while idle, so it could stay invisible.)
     if ui.ctx().global_style().visuals.text_cursor.blink {
         ui.ctx().global_style_mut(|style| {
             style.visuals.text_cursor.blink = false;
@@ -578,7 +578,7 @@ fn framed(
                     ui.set_min_height(height - 2.0 * margin);
                     let inner_width = ui.available_width();
 
-                    // Pteron's own window top: a strip to drag the window by, and its buttons.
+                    // Sirocco's own window top: a strip to drag the window by, and its buttons.
                     if model.own_titlebar {
                         let (strip, _) = ui.allocate_exact_size(vec2(inner_width, 22.0), Sense::hover());
                         let strip = strip.expand2(vec2(margin, 0.0)).with_min_y(strip.min.y - margin);
@@ -610,7 +610,7 @@ fn framed(
                     {
                         actions.push(Action::NewTab);
                     }
-                    // Pteron: what Plume Music is playing, with simple controls.
+                    // Sirocco: what Plume Music is playing, with simple controls.
                     music_card(ui, inner_width);
                     ui.add_space(6.0);
                     let total = model.tabs.len() + model.sleeping.len() + model.bookmarks.len();
@@ -1257,7 +1257,7 @@ pub(crate) fn tab_menu(ui: &mut egui::Ui, index: usize, model: &Model, actions: 
     let mut awake = tab.awake;
     if ui
         .checkbox(&mut awake, "Keep awake")
-        .on_hover_text("This tab never goes to sleep, until you close it or Pteron")
+        .on_hover_text("This tab never goes to sleep, until you close it or Sirocco")
         .changed()
     {
         actions.push(Action::ToggleAwake(index));

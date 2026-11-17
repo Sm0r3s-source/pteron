@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: Plume's extras. Subscriptions without an account (YouTube's public channel feeds,
+//! Sirocco: Plume's extras. Subscriptions without an account (YouTube's public channel feeds,
 //! with import and export), chapters, subtitles, SponsorBlock and the remembered player
 //! switches. The Plume pages reach these through the local video helper (`/p/<secret>?x=...`).
 

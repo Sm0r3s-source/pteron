@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: full ad and tracker filter lists (EasyList and EasyPrivacy) for the ad blocker.
+//! Sirocco: full ad and tracker filter lists (EasyList and EasyPrivacy) for the ad blocker.
 //! The lists are downloaded once a week from easylist.to into the settings folder and read by
 //! the Rust `adblock` engine. They cost memory, so this is a separate switch, off by default.
 

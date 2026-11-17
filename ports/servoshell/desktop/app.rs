@@ -98,10 +98,10 @@ impl App {
             .protocol_registry(protocol_registry)
             .event_loop_waker(self.waker.clone());
 
-        // Pteron: take in a newer copy of bookmarks and settings from the sync folder first.
+        // Sirocco: take in a newer copy of bookmarks and settings from the sync folder first.
         crate::sync::startup();
 
-        // Pteron: pinned tabs (and, if chosen, the whole last session) come back at launch.
+        // Sirocco: pinned tabs (and, if chosen, the whole last session) come back at launch.
         let plan = crate::pteron::startup_plan(self.servoshell_preferences.url.is_some());
         if let Some(first) = &plan.first &&
             let Ok(url) = ServoUrl::parse(&first.url)
@@ -109,7 +109,7 @@ impl App {
             self.initial_url = url;
         }
 
-        // Pteron: the very first launch opens the welcome page.
+        // Sirocco: the very first launch opens the welcome page.
         if plan.first.is_none() &&
             self.servoshell_preferences.url.is_none() &&
             crate::pteron::take_first_run() &&
@@ -188,7 +188,7 @@ impl App {
                 .map(Rc::new),
         ));
         running_state.apply_compat();
-        // Pteron: dark mode and site styles for pages.
+        // Sirocco: dark mode and site styles for pages.
         running_state.refresh_page_look();
         let initial_url = self.initial_url.as_url().clone();
         let window = running_state.open_window(
@@ -241,7 +241,7 @@ impl App {
         )
     }
 
-    /// Pteron: block until the next event, but wake up every few seconds when tab
+    /// Sirocco: block until the next event, but wake up every few seconds when tab
     /// sleeping is enabled so idle tabs get checked.
     /// Also wakes up for the next frame the user interface asked for.
     fn set_idle_control_flow(event_loop: &ActiveEventLoop) {
@@ -320,6 +320,11 @@ impl ApplicationHandler<AppEvent> for App {
                     headed_window.handle_winit_app_event(state.clone(), app_event);
                 }
             },
+            AppEvent::RequestRepaint(window_id) => {
+                if let Some(window) = state.window(window_id) {
+                    window.set_needs_repaint();
+                }
+            },
             #[cfg(feature = "gamepad")]
             AppEvent::Gamepad(event, gamepad_name, gamepad_index) => {
                 state.handle_gamepad_events(event, gamepad_name, gamepad_index);
@@ -333,7 +338,7 @@ impl ApplicationHandler<AppEvent> for App {
         Self::set_idle_control_flow(event_loop);
     }
 
-    /// Pteron: something outside winit's own events (a compatibility tab's page) asked for a frame.
+    /// Sirocco: something outside winit's own events (a compatibility tab's page) asked for a frame.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         crate::compat_host::pump_gtk();
         if crate::window::next_repaint().is_some_and(|at| at <= Instant::now()) &&
@@ -346,7 +351,7 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         crate::compat_host::pump_gtk();
-        // Pteron: wake up now and then so idle background tabs can be put to sleep even
+        // Sirocco: wake up now and then so idle background tabs can be put to sleep even
         // when nothing else is happening.
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
             if !self.pump_servo_event_loop(event_loop.into()) {

@@ -2,15 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron's on-device crash log.
+//! Sirocco's on-device crash log.
 //!
-//! * One small text file per day in `<config>/Pteron/crashes/`, named `crash-YYYY-MM-DD.log`.
+//! * One small text file per day in `<config>/Sirocco/crashes/`, named `crash-YYYY-MM-DD.log`.
 //! * Files older than yesterday are deleted automatically (on start-up and whenever a new day
 //!   begins), and every file and every entry has a size cap, so the folder can never grow.
 //! * Panics are written with a backtrace. Hard crashes that skip the panic hook (a native crash
 //!   on Windows, an abort, power loss) are detected on the next start by a "session marker"
 //!   that is removed on clean exit.
-//! * Nothing is ever sent anywhere. Page addresses are not logged by Pteron itself.
+//! * Nothing is ever sent anywhere. Page addresses are not logged by Sirocco itself.
 
 use std::fs;
 use std::io::Write;
@@ -145,7 +145,7 @@ pub(crate) fn append_to(dir: &Path, now_secs: i64, text: &str) -> bool {
     if is_new {
         let _ = writeln!(
             f,
-            "Pteron crash log for {}\nversion {} on {}\nThis file stays on your computer and is deleted automatically after 2 days.\n",
+            "Sirocco crash log for {}\nversion {} on {}\nThis file stays on your computer and is deleted automatically after 2 days.\n",
             timestamp(now_secs).split(' ').next().unwrap_or(""),
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS
@@ -171,7 +171,7 @@ pub(crate) fn begin_session_in(dir: &Path, now_secs: i64) -> Option<String> {
     previous.map(|p| {
         let started = p.trim().parse::<i64>().map(timestamp).unwrap_or_default();
         format!(
-            "Previous session did not exit cleanly (started {}). Pteron probably crashed or was \
+            "Previous session did not exit cleanly (started {}). Sirocco probably crashed or was \
              closed by the system (for example out of memory). No panic message was recorded, \
              so this was most likely a native crash.",
             started

@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: privacy helpers. Removes tracking parts from addresses, and tells pages the user
+//! Sirocco: privacy helpers. Removes tracking parts from addresses, and tells pages the user
 //! does not want to be tracked (the network side, the `DNT` and `Sec-GPC` headers, is a Servo
 //! preference set at start-up; this is the matching `navigator` side).
 
@@ -55,7 +55,7 @@ pub(crate) const SCRIPT: &str = "(function(){try{var n=Navigator.prototype;\
 Object.defineProperty(n,'doNotTrack',{get:function(){return '1';},configurable:true});\
 Object.defineProperty(n,'globalPrivacyControl',{get:function(){return true;},configurable:true});}catch(e){}})();";
 
-/// Pteron: whether `url` points into the user's own computer or home network (router, printer,
+/// Sirocco: whether `url` points into the user's own computer or home network (router, printer,
 /// local servers): loopback, private and link-local addresses, 0.0.0.0, and names like
 /// `localhost` or `printer.local`.
 pub(crate) fn is_private_address(url: &Url) -> bool {
@@ -86,9 +86,9 @@ pub(crate) fn is_private_address(url: &Url) -> bool {
     }
 }
 
-/// Pteron: a site on the internet may not make the browser send requests into your own computer
+/// Sirocco: a site on the internet may not make the browser send requests into your own computer
 /// or home network (a page could otherwise change router settings or talk to programs that
-/// only listen locally). Pages that are themselves local, and Pteron's own pages, are not limited.
+/// only listen locally). Pages that are themselves local, and Sirocco's own pages, are not limited.
 pub(crate) fn blocks_private_request(target: &Url, page: Option<&Url>) -> bool {
     let Some(page) = page else { return false };
     matches!(page.scheme(), "http" | "https") &&
@@ -151,7 +151,7 @@ mod tests {
         }
         assert!(!blocks_private_request(&u("https://cdn.example/a.js"), Some(&page)));
         assert!(!blocks_private_request(&u("http://8.8.8.8/"), Some(&page)));
-        // A local page (a router's own page, Pteron's helper pages) may.
+        // A local page (a router's own page, Sirocco's helper pages) may.
         assert!(!blocks_private_request(&u("http://192.168.1.1/x"), Some(&u("http://192.168.1.1/"))));
         assert!(!blocks_private_request(&u("http://127.0.0.1:5000/v"), Some(&u("file:///home/u/page.html"))));
         assert!(!blocks_private_request(&u("http://127.0.0.1:5000/v"), None));

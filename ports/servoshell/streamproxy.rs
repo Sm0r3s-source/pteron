@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: a tiny local web server (127.0.0.1 only) that turns YouTube's separate video and
+//! Sirocco: a tiny local web server (127.0.0.1 only) that turns YouTube's separate video and
 //! audio streams into one MP4 file for a plain `<video>` element. See `mp4mux` for the format
 //! work. This file does the networking:
 //!
@@ -13,7 +13,7 @@
 //!   fetched while the current one is being sent).
 //! * Memory use is a couple of segments (a few MB) however long the video is.
 //!
-//! Downloads from YouTube use `curl.exe` (part of Windows 10 and later), so Pteron needs no
+//! Downloads from YouTube use `curl.exe` (part of Windows 10 and later), so Sirocco needs no
 //! extra libraries. Only `https://*.googlevideo.com/` addresses are ever fetched.
 
 use crate::locks::LockExt;
@@ -29,7 +29,7 @@ use log::{info, warn};
 use crate::mp4mux::{Init, Kind, Layout, MuxError, build_layout, load_track, parse_init};
 
 const MAX_SETS: usize = 24;
-/// The "quality" number of the audio-only file of a track (Pteron Music).
+/// The "quality" number of the audio-only file of a track (Sirocco Music).
 pub(crate) const AUDIO_ONLY: u32 = 0;
 /// Ready file layouts kept (each holds the sample tables of one quality of one video). The
 /// least recently used one goes first.
@@ -418,7 +418,7 @@ fn session_for(
         guard.sets.iter().find(|(t, _)| t == token).map(|(_, s)| s.clone()).ok_or("unknown video")?
     };
     if itag == AUDIO_ONLY {
-        // Pteron Music: only the audio track, no video is downloaded at all.
+        // Sirocco Music: only the audio track, no video is downloaded at all.
         let (audio_init, audio_data) = prepare_stream(&set.audio, net, None)?;
         let layout = crate::mp4mux::build_audio_layout(&audio_init, &audio_data).map_err(|e| e.to_string())?;
         crate::crashlog::note(&format!(
@@ -479,7 +479,7 @@ fn session_for(
     let (audio_init, audio_data) = (&audio.0, &audio.1);
     let layout = build_layout(&video_init, &video_data, audio_init, audio_data).map_err(|e| e.to_string())?;
     info!(
-        "Pteron stream: {} pieces, {} bytes for itag {itag}",
+        "Sirocco stream: {} pieces, {} bytes for itag {itag}",
         layout.pieces.len(),
         layout.total
     );
@@ -592,7 +592,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<State>>, net: &Net
     let session = match session_for(state, net, building, &token, itag, partial) {
         Ok(s) => s,
         Err(message) => {
-            warn!("Pteron stream: {message}");
+            warn!("Sirocco stream: {message}");
             crate::crashlog::note(&format!("video helper: itag {itag} could not start: {message}"));
             return fail(&mut stream, "502 Bad Gateway");
         },
@@ -618,7 +618,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<State>>, net: &Net
         return;
     }
     if let Err(e) = stream_range(&session, start, end, &mut stream) {
-        warn!("Pteron stream stopped: {e}");
+        warn!("Sirocco stream stopped: {e}");
         crate::crashlog::note(&format!("video helper: itag {itag} stopped at a request for {start}-{end}: {e}"));
     }
 }

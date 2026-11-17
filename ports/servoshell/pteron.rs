@@ -2,15 +2,51 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: product name and user settings (currently: the search engine).
-//! Settings live in `<config dir>/Pteron/settings.json`.
+//! Sirocco: product name and user settings (currently: the search engine).
+//! Settings live in `<config dir>/Sirocco/settings.json`.
 
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
 use log::warn;
 
-pub(crate) const APP_NAME: &str = "Pteron";
+pub(crate) const APP_NAME: &str = "Sirocco";
+/// The name before the rename: its folders are moved to the new name on first start.
+const OLD_APP_NAME: &str = "Pteron";
+
+/// Moves `from` to `to`; where `to` already exists, whatever is not there yet is moved into it.
+fn merge_move(from: &std::path::Path, to: &std::path::Path) {
+    if !to.exists() {
+        if std::fs::rename(from, to).is_ok() {
+            return;
+        }
+        let _ = std::fs::create_dir_all(to);
+    }
+    let Ok(entries) = std::fs::read_dir(from) else { return };
+    for entry in entries.flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            merge_move(&entry.path(), &target);
+        } else if !target.exists() {
+            let moved = std::fs::rename(entry.path(), &target).is_ok();
+            if !moved && std::fs::copy(entry.path(), &target).is_ok() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(from);
+}
+
+/// The browser used to be called Pteron: bring its settings, history, passwords and saved data
+/// along. Runs before anything reads those folders.
+pub(crate) fn migrate_old_folders() {
+    for base in [::dirs::config_dir(), ::dirs::data_dir(), ::dirs::cache_dir(), ::dirs::data_local_dir()].into_iter().flatten() {
+        let (old, new) = (base.join(OLD_APP_NAME), base.join(APP_NAME));
+        if old.is_dir() && old != new {
+            merge_move(&old, &new);
+        }
+    }
+}
 
 /// Built-in search engines: (id, label, URL template where `%s` is the query).
 pub(crate) const ENGINES: &[(&str, &str, &str)] = &[
@@ -45,7 +81,7 @@ pub(crate) struct Settings {
     pub homepage_url: String,
     /// Remember visited pages (for address bar suggestions and new tab shortcuts).
     pub history_enabled: bool,
-    /// Play YouTube videos in Pteron's own simple player (search, channels and videos).
+    /// Play YouTube videos in Sirocco's own simple player (search, channels and videos).
     pub youtube_player: bool,
     /// Use the graphics card to decode video (takes effect after restart).
     pub hw_video_decode: bool,
@@ -650,7 +686,7 @@ fn tile_html(suggestion: &crate::library::Suggestion) -> String {
     )
 }
 
-/// A secret for this run, so that only Pteron's own new tab page can change its shortcuts.
+/// A secret for this run, so that only Sirocco's own new tab page can change its shortcuts.
 pub(crate) fn newtab_token() -> &'static str {
     static TOKEN: OnceLock<String> = OnceLock::new();
     TOKEN.get_or_init(|| {
@@ -813,7 +849,7 @@ pub(crate) fn popup_notice() -> Option<u32> {
 }
 
 
-/// True once, the first time Pteron starts: the welcome page is shown and remembered as shown.
+/// True once, the first time Sirocco starts: the welcome page is shown and remembered as shown.
 pub(crate) fn take_first_run() -> bool {
     let mut current = settings();
     if current.welcome_shown {
@@ -832,18 +868,18 @@ h1{font-size:28px;margin:0 0 4px}h2{font-size:18px;margin:28px 0 8px}p{margin:8p
 li{margin:6px 0}code{background:#2a2e38;padding:1px 6px;border-radius:5px}a{color:#6ea8ff}.btn{display:inline-block;background:#6ea8ff;color:#10131a;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600}\
 @media (prefers-color-scheme:light){body{background:#fafafa;color:#1c1e22}.card{background:#fff;border-color:#dcdfe4}code{background:#eceef2}a{color:#1d5fd1}}</style>";
 
-/// The page shown the first time Pteron opens.
+/// The page shown the first time Sirocco opens.
 pub(crate) fn welcome_html() -> String {
     format!(
-        "<!doctype html><title>Welcome to Pteron</title>{PAGE_STYLE}<h1>Welcome to Pteron</h1>\
+        "<!doctype html><title>Welcome to Sirocco</title>{PAGE_STYLE}<h1>Welcome to Sirocco</h1>\
 <p class=sub>A light browser built on the Servo engine. This is an early test version.</p>\
 <div class=card><h2>What to expect</h2><ul>\
 <li>It uses much less memory than the big browsers, and background tabs go to sleep by themselves.</li>\
-<li>YouTube opens in Pteron's own simple player, and <b>Music</b> in its header opens Plume Music for listening.</li>\
+<li>YouTube opens in Sirocco's own simple player, and <b>Music</b> in its header opens Plume Music for listening.</li>\
 <li>It is young: some websites look wrong, load slowly or do not work. <a href=\"servo:known-issues\">See the list of known problems.</a></li></ul></div>\
 <div class=card><h2>Found a problem?</h2>\
-<p>Open the sidebar, then <b>Settings &rarr; About &rarr; Report a problem</b>. It saves a small file on your Desktop with the details. Send that file to whoever gave you Pteron.</p></div>\
-<div class=card><h2>Updates</h2><p>Pteron updates itself from <b>Settings &rarr; About</b>. Nothing is installed without your say-so.</p></div>"
+<p>Open the sidebar, then <b>Settings &rarr; About &rarr; Report a problem</b>. It saves a small file on your Desktop with the details. Send that file to whoever gave you Sirocco.</p></div>\
+<div class=card><h2>Updates</h2><p>Sirocco updates itself from <b>Settings &rarr; About</b>. Nothing is installed without your say-so.</p></div>"
     )
 }
 
@@ -851,11 +887,11 @@ pub(crate) fn welcome_html() -> String {
 pub(crate) fn known_issues_html() -> String {
     format!(
         "<!doctype html><title>Known problems</title>{PAGE_STYLE}<h1>Known problems</h1>\
-<p class=sub>Pteron build {}. This list is what is already known, so you do not need to report these.</p>\
+<p class=sub>Sirocco build {}. This list is what is already known, so you do not need to report these.</p>\
 <div class=card><h2>Websites</h2><ul>\
 <li>Sites that play protected (DRM) media do not work: Spotify, Netflix, Disney+ and similar.</li>\
 <li>Sites with strict anti-bot checks (such as a login behind a reCAPTCHA) may not let you in.</li>\
-<li>Sites behind Cloudflare&#39;s &quot;Just a moment&quot; or &quot;Performing security verification&quot; check (for example claude.ai or isdown.app) cannot be passed by Pteron&#39;s own engine. Pteron opens them in a <b>compatibility tab</b> (your system&#39;s web engine) instead; you can change this in Settings, Tabs. That tab keeps its own sign-ins and does not use the ad blocker or saved passwords.</li>\
+<li>Sites behind Cloudflare&#39;s &quot;Just a moment&quot; or &quot;Performing security verification&quot; check (for example claude.ai or isdown.app) cannot be passed by Sirocco&#39;s own engine. Sirocco opens them in a <b>compatibility tab</b> (your system&#39;s web engine) instead; you can change this in Settings, Tabs. That tab keeps its own sign-ins and does not use the ad blocker or saved passwords.</li>\
 <li>Some modern web pages look wrong, stay blank, or load slowly, because the engine does not support every web feature yet.</li>\
 <li>The text cursor may not show in some text boxes (being looked at).</li></ul></div>\
 <div class=card><h2>Reading mode, sync and security</h2><ul>\
@@ -877,7 +913,7 @@ pub(crate) fn known_issues_html() -> String {
 <div class=card><h2>The browser</h2><ul>\
 <li>Windows and Linux (the Linux build is new and runs in X11 mode); macOS comes later. Saved passwords work on Windows and Linux (on Linux they are locked with a key in your system keyring, or in a key file only your account can read when there is no keyring). No extensions and no private window. Downloads (the buttons in Plume and Plume Music) save .mp4 video and .mp3 audio. Saved passwords work on ordinary login forms; some sites with unusual forms may not offer to save, and there is no import from other browsers yet. The ad blocker only covers well-known ad and tracker networks (turn it off in Settings if a page looks broken).</li>\
 <li>The installer is not signed yet, so Windows shows a &quot;protected your PC&quot; warning. Choose <b>More info</b>, then <b>Run anyway</b>.</li>\
-<li>Memory was measured once (build 62, Linux, no graphics card; <i>benchmarks/report.md</i> in Pteron&#39;s repository): a single page took less than Firefox and about the same as Chrome, but with ten tabs open Chrome and Firefox used less, even after Pteron&#39;s background tabs went to sleep. Work on that continues.</li>\
+<li>Memory was measured once (build 62, Linux, no graphics card; <i>benchmarks/report.md</i> in Sirocco&#39;s repository): a single page took less than Firefox and about the same as Chrome, but with ten tabs open Chrome and Firefox used less, even after Sirocco&#39;s background tabs went to sleep. Work on that continues.</li>\
 <li>Muting a tab mutes its audio and video elements; sound made with the Web Audio API (some games and players) keeps playing.</li></ul></div>\
 <p>Something not on this list? <b>Settings &rarr; About &rarr; Report a problem</b>.</p>",
         crate::updater::BUILD
@@ -1102,5 +1138,29 @@ mod keyword_tests {
         assert_eq!(expand_keyword("i"), None);
         assert_eq!(expand_keyword("it works"), None);
         assert!(expand_keyword("img red car").unwrap().contains("red+car"));
+    }
+
+    #[test]
+    fn old_folder_moves_to_the_new_name() {
+        let base = std::env::temp_dir().join(format!("sirocco_merge_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (old, new) = (base.join("Pteron"), base.join("Sirocco"));
+        std::fs::create_dir_all(old.join("player")).unwrap();
+        std::fs::write(old.join("history.json"), "old").unwrap();
+        std::fs::write(old.join("player").join("a.html"), "a").unwrap();
+        merge_move(&old, &new);
+        assert!(!old.exists());
+        assert_eq!(std::fs::read_to_string(new.join("history.json")).unwrap(), "old");
+        assert!(new.join("player").join("a.html").exists());
+        // a folder that already exists keeps its own files; the missing ones come over
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("history.json"), "older").unwrap();
+        std::fs::write(old.join("passwords.json"), "p").unwrap();
+        merge_move(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("history.json")).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(new.join("passwords.json")).unwrap(), "p");
+        // a conflicting file is left behind, never overwritten or deleted
+        assert_eq!(std::fs::read_to_string(old.join("history.json")).unwrap(), "older");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

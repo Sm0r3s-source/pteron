@@ -1,4 +1,4 @@
-//! Pteron: search several engines at once.
+//! Sirocco: search several engines at once.
 //!
 //! Two ways, chosen in Settings: open one tab per engine, or fetch every engine's results
 //! in the background and show them merged on one local page. The merged page reads each
@@ -144,7 +144,7 @@ fn run(settings: &Settings, query: &str, engines: &[String]) -> String {
 fn fetch_engine(id: &str, open_url: &str) -> Result<Vec<Hit>, String> {
     let supported = matches!(id, "duckduckgo" | "bing" | "brave") || id == pteron::SEARXNG_ID;
     if !supported {
-        return Err("Pteron cannot read this engine's results yet".to_string());
+        return Err("Sirocco cannot read this engine's results yet".to_string());
     }
     let fetch_url = if id == pteron::SEARXNG_ID {
         let sep = if open_url.contains('?') { '&' } else { '?' };

@@ -5,6 +5,7 @@
 //! An event loop implementation that works in headless mode.
 
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::Wake;
 use std::time;
 
 use gilrs::Event;
@@ -15,12 +16,14 @@ use servo::GamepadIndex;
 use winit::event_loop::{EventLoop, EventLoop as WinitEventLoop, EventLoopProxy};
 
 use super::app::App;
+use crate::window::ServoShellWindowId;
 
 #[derive(Debug)]
 pub enum AppEvent {
     /// Another process or thread has kicked the OS event loop with EventLoopWaker.
     Waker,
     Accessibility(egui_winit::accesskit_winit::Event),
+    RequestRepaint(ServoShellWindowId),
     #[cfg(feature = "gamepad")]
     Gamepad(Event, String, GamepadIndex),
 }
@@ -51,7 +54,7 @@ impl ServoShellEventLoop {
 
     pub(crate) fn headed() -> ServoShellEventLoop {
         let mut builder = WinitEventLoop::with_user_event();
-        // Pteron: the compatibility tab needs an X11 window (also works through XWayland).
+        // Sirocco: the compatibility tab needs an X11 window (also works through XWayland).
         #[cfg(target_os = "linux")]
         if crate::compat_host::prefer_x11() {
             use winit::platform::x11::EventLoopBuilderExtX11;
@@ -168,5 +171,24 @@ impl EventLoopWaker for HeadlessEventLoopWaker {
 
     fn clone_box(&self) -> Box<dyn EventLoopWaker> {
         Box::new(self.clone())
+    }
+}
+
+pub(crate) struct RepaintEventLoopWaker {
+    proxy: EventLoopProxy<AppEvent>,
+    window_id: ServoShellWindowId,
+}
+
+impl RepaintEventLoopWaker {
+    pub(crate) fn new(proxy: EventLoopProxy<AppEvent>, window_id: ServoShellWindowId) -> Self {
+        Self { proxy, window_id }
+    }
+}
+
+impl Wake for RepaintEventLoopWaker {
+    fn wake(self: Arc<Self>) {
+        let _ = self
+            .proxy
+            .send_event(AppEvent::RequestRepaint(self.window_id));
     }
 }

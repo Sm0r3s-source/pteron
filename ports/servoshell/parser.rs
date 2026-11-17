@@ -25,7 +25,7 @@ pub fn get_default_url(
     exists: impl FnOnce(&PathBuf) -> bool,
     preferences: &crate::prefs::ServoShellPreferences,
 ) -> ServoUrl {
-    // Pteron: with no address given, start on the new tab page (with its search box)
+    // Sirocco: with no address given, start on the new tab page (with its search box)
     // instead of the old default home page.
     const NEW_TAB: &str = "servo:newtab";
     let is_old_default = |url: &str| {
@@ -40,7 +40,7 @@ pub fn get_default_url(
     if !custom_home.is_empty() && !custom_home.contains(':') {
         custom_home = format!("https://{custom_home}");
     }
-    // Pteron: the home page must be a real address (not javascript: or data:).
+    // Sirocco: the home page must be a real address (not javascript: or data:).
     if !["https://", "http://", "servo:", "file://"].iter().any(|p| custom_home.starts_with(p)) {
         custom_home.clear();
     }
@@ -101,7 +101,7 @@ pub(crate) fn location_bar_input_to_url(request: &str, searchpage: &str) -> Opti
     if let Some(url) = crate::pteron::expand_keyword(request).and_then(|u| ServoUrl::parse(&u).ok()) {
         return Some(url);
     }
-    // Pteron: a javascript: address typed or pasted into the address bar would run in the open
+    // Sirocco: a javascript: address typed or pasted into the address bar would run in the open
     // page (a trick: "paste this to get ..."). It is searched for instead, as in other browsers.
     let input_url = ServoUrl::parse(request).ok().filter(|url| url.scheme() != "javascript");
     if input_url.is_none() && request.get(..11).is_some_and(|s| s.eq_ignore_ascii_case("javascript:")) {

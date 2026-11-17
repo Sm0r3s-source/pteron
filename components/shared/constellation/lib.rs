@@ -30,8 +30,11 @@ use paint_api::display_list::PaintTimingInfo;
 use profile_traits::mem::MemoryReportResult;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_base::generic_channel::GenericCallback;
-use servo_base::id::{LCPCandidateID, MessagePortId, PipelineId, ScriptEventLoopId, WebViewId};
+use servo_base::id::{
+    ContainerTimingID, LCPCandidateID, MessagePortId, PipelineId, ScriptEventLoopId, WebViewId,
+};
 use servo_config::prefs::PrefValue;
 use servo_url::{ImmutableOrigin, ServoUrl};
 pub use structured_data::*;
@@ -100,7 +103,7 @@ pub enum EmbedderToConstellationMessage {
     EvaluateJavaScript(WebViewId, JavaScriptEvaluationId, String),
     /// Create a memory report and return it via the [`GenericCallback`]
     CreateMemoryReport(GenericCallback<MemoryReportResult>),
-    /// Pteron: run a garbage collection in every script thread, so that memory held by closed
+    /// Sirocco: run a garbage collection in every script thread, so that memory held by closed
     /// documents (their DOM and layout boxes) is freed now rather than at the next allocation.
     CollectGarbage,
     /// Sends the generated image key to the image cache associated with this pipeline.
@@ -123,6 +126,9 @@ pub enum EmbedderToConstellationMessage {
     /// Clears the session history for the `WebView` with the given `WebViewId`, leaving
     /// the `WebView` with only the current URL in its session history.
     ClearSessionHistory(WebViewId),
+    /// Inform the `Constellation` that the embedder has changed the network
+    /// online state.
+    SetNetworkOnlineState(bool),
 }
 
 pub enum UserContentManagerAction {
@@ -140,6 +146,10 @@ pub enum PaintMetricEvent {
     FirstPaint(PaintTimingInfo, bool /* first_reflow */),
     FirstContentfulPaint(PaintTimingInfo, bool /* first_reflow */),
     LargestContentfulPaint(PaintTimingInfo, LCPCandidateID),
+    /// The Container Timing updates presented in a single composited frame. Script holds
+    /// the records these IDs refer to; all paint contributes is the frame's paint time.
+    /// <https://wicg.github.io/container-timing/>
+    ContainerTiming(CrossProcessInstant, Vec<ContainerTimingID>),
 }
 
 impl fmt::Debug for EmbedderToConstellationMessage {

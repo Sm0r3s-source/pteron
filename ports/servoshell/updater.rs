@@ -1,5 +1,5 @@
-/* Pteron: update from inside the app. Looks at the newest GitHub release, downloads the zip,
- * checks it, and lets a small helper swap the files once Pteron has closed. */
+/* Sirocco: update from inside the app. Looks at the newest GitHub release, downloads the zip,
+ * checks it, and lets a small helper swap the files once Sirocco has closed. */
 
 //! Everything here talks to GitHub through the system `curl` (like the video helper does), so
 //! no extra libraries are needed.
@@ -12,10 +12,13 @@ use crate::streamproxy::UPSTREAM_USER_AGENT;
 
 /// This program's own number. Every release is tagged `build-<number>`; a bigger number than
 /// this one means an update is available. (Raised with every update.)
-pub(crate) const BUILD: u32 = 69;
+pub(crate) const BUILD: u32 = 70;
 
 /// Where releases are published: `https://github.com/<REPO>/releases`.
 pub(crate) const REPO: &str = "Sm0r3s-source/pteron";
+/// The repository's new name (Sirocco). While both exist GitHub redirects the old name to the new
+/// one, and its download links then carry the new name, so both are accepted.
+const NEW_REPO: &str = "Sm0r3s-source/sirocco";
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Release {
@@ -88,18 +91,23 @@ fn download_prefix() -> String {
     format!("https://github.com/{REPO}/releases/download/")
 }
 
+fn download_prefixes() -> [String; 2] {
+    [download_prefix(), format!("https://github.com/{NEW_REPO}/releases/download/")]
+}
+
 /// Whether `url` is a download link of this repository (GitHub ignores upper/lower case in
 /// repository names and may hand out either spelling).
 fn is_release_url(url: &str) -> bool {
-    let prefix = download_prefix();
-    url.len() >= prefix.len() && url.is_char_boundary(prefix.len()) && url[..prefix.len()].eq_ignore_ascii_case(&prefix)
+    download_prefixes().iter().any(|prefix| {
+        url.len() >= prefix.len() && url.is_char_boundary(prefix.len()) && url[..prefix.len()].eq_ignore_ascii_case(prefix)
+    })
 }
 
-/// Whether `name` is the download for this system: `Pteron-build-N-win64.zip` on Windows,
-/// `Pteron-build-N-linux64.tar.gz` on Linux.
+/// Whether `name` is the download for this system: `Sirocco-build-N-win64.zip` on Windows,
+/// `Sirocco-build-N-linux64.tar.gz` on Linux.
 fn is_package(name: &str, linux: bool) -> bool {
     let lower = name.to_ascii_lowercase();
-    name.contains("Pteron") &&
+    (name.contains("Sirocco") || name.contains("Pteron")) &&
         if linux { lower.ends_with(".tar.gz") && lower.contains("linux") } else { lower.ends_with(".zip") && !lower.contains("linux") }
 }
 
@@ -310,7 +318,8 @@ pub(crate) fn check_async() {
     }
     set(Status::Checking);
     std::thread::spawn(|| {
-        let result = fetch_text(&format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        let result = fetch_text(&format!("https://api.github.com/repos/{NEW_REPO}/releases/latest"))
+            .or_else(|_| fetch_text(&format!("https://api.github.com/repos/{REPO}/releases/latest")))
             .and_then(|text| parse_release(&text).ok_or_else(|| "The newest release has no download for this system.".to_string()));
         if let Ok(mut done) = CHECKED_THIS_RUN.lock() {
             *done = true;
@@ -448,7 +457,7 @@ fn download(release: &Release) -> Result<PathBuf, String> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not make a download folder: {e}"))?;
     let extension = if cfg!(target_os = "linux") { "tar.gz" } else { "zip" };
-    let zip = dir.join(format!("Pteron-build-{}.{extension}", release.build));
+    let zip = dir.join(format!("Sirocco-build-{}.{extension}", release.build));
     let errfile = dir.join("download.err");
     let mut child = with_curl(|mut command| {
         command
@@ -496,7 +505,7 @@ fn download(release: &Release) -> Result<PathBuf, String> {
     };
     if !signed {
         let _ = std::fs::remove_file(&zip);
-        return Err("This update is not signed by the Pteron author, so it was not installed.".into());
+        return Err("This update is not signed by the Sirocco author, so it was not installed.".into());
     }
     *crate::locks::LockExt::lock_ok(verified()) = Some(expected);
     Ok(zip)
@@ -504,18 +513,18 @@ fn download(release: &Release) -> Result<PathBuf, String> {
 
 // ---------------------------------------------------------------- installing
 
-/// PowerShell that waits for Pteron to close, unpacks the zip, copies it over this folder
-/// and starts Pteron again. A failure is written to `update-error.txt` and the old copy is
+/// PowerShell that waits for Sirocco to close, unpacks the zip, copies it over this folder
+/// and starts Sirocco again. A failure is written to `update-error.txt` and the old copy is
 /// started again.
 #[cfg(windows)]
 const APPLY_SCRIPT: &str = r#"param([int]$ProcId, [string]$Zip, [string]$Dir, [string]$Exe)
 $ErrorActionPreference = 'Stop'
-$data = Join-Path $env:APPDATA 'Pteron'
+$data = Join-Path $env:APPDATA 'Sirocco'
 New-Item -ItemType Directory -Force -Path $data | Out-Null
 $log = Join-Path $data 'update.log'
 function Log($m) { "$([DateTime]::Now.ToString('s')) $m" | Add-Content -Path $log }
 try {
-    Log "update started, waiting for Pteron ($ProcId) to close"
+    Log "update started, waiting for Sirocco ($ProcId) to close"
     try { Wait-Process -Id $ProcId -Timeout 60 } catch {}
     if (Get-Process -Id $ProcId -ErrorAction SilentlyContinue) { Stop-Process -Id $ProcId -Force; Start-Sleep -Seconds 1 }
     $stage = Join-Path $env:TEMP 'pteron_update_stage'
@@ -523,7 +532,7 @@ try {
     Expand-Archive -Path $Zip -DestinationPath $stage -Force
     $items = @(Get-ChildItem $stage)
     if ($items.Count -eq 1 -and $items[0].PSIsContainer) { $root = $items[0].FullName } else { $root = $stage }
-    if (-not (Test-Path (Join-Path $root 'Pteron.exe'))) { throw 'The update file does not contain Pteron.exe.' }
+    if (-not (Test-Path (Join-Path $root 'Sirocco.exe'))) { throw 'The update file does not contain Sirocco.exe.' }
     robocopy $root $Dir /E /R:15 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Copying the new files failed (code $LASTEXITCODE)." }
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
@@ -537,18 +546,18 @@ try {
 Start-Process -FilePath $Exe
 "#;
 
-/// Linux: waits for Pteron to close, unpacks the archive, copies it over the install folder and
-/// starts Pteron again. A failure is written to `update-error.txt` and the old copy is started again.
+/// Linux: waits for Sirocco to close, unpacks the archive, copies it over the install folder and
+/// starts Sirocco again. A failure is written to `update-error.txt` and the old copy is started again.
 /// Arguments: process id, archive, install folder, program.
 #[cfg(target_os = "linux")]
 const APPLY_SH: &str = r#"#!/bin/sh
 PID="$1"; ARCHIVE="$2"; DIR="$3"; EXE="$4"
-DATA="${XDG_CONFIG_HOME:-$HOME/.config}/Pteron"
+DATA="${XDG_CONFIG_HOME:-$HOME/.config}/Sirocco"
 mkdir -p "$DATA"
 LOG="$DATA/update.log"
 log() { echo "$(date +%Y-%m-%dT%H:%M:%S) $1" >> "$LOG"; }
 fail() { log "update FAILED: $1"; echo "$1" > "$DATA/update-error.txt"; }
-log "update started, waiting for Pteron ($PID) to close"
+log "update started, waiting for Sirocco ($PID) to close"
 i=0
 while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done
 if kill -0 "$PID" 2>/dev/null; then kill -9 "$PID" 2>/dev/null; sleep 1; fi
@@ -556,10 +565,10 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/pteron_update_stage.XXXXXX")" || { fail "Cou
 if tar -xzf "$ARCHIVE" -C "$STAGE"; then
   ROOT="$STAGE"
   if [ "$(ls -A "$STAGE" | wc -l)" -eq 1 ] && [ -d "$STAGE/$(ls -A "$STAGE")" ]; then ROOT="$STAGE/$(ls -A "$STAGE")"; fi
-  if [ ! -f "$ROOT/pteron" ]; then
-    fail "The update file does not contain pteron."
+  if [ ! -f "$ROOT/sirocco" ]; then
+    fail "The update file does not contain sirocco."
   elif cp -af "$ROOT"/. "$DIR"/ 2>>"$LOG"; then
-    chmod +x "$DIR/pteron" 2>/dev/null
+    chmod +x "$DIR/sirocco" 2>/dev/null
     rm -f "$ARCHIVE" "$DATA/update-error.txt"
     log "update done"
   else
@@ -577,10 +586,10 @@ nohup "$EXE" >/dev/null 2>&1 &
 #[cfg(windows)]
 const APPLY_CMD: &str = r#"@echo off
 setlocal
-set "DATA=%APPDATA%\Pteron"
+set "DATA=%APPDATA%\Sirocco"
 if not exist "%DATA%" mkdir "%DATA%"
 set "LOG=%DATA%\update.log"
-echo %date% %time% cmd helper started, waiting for Pteron (%1) to close>>"%LOG%"
+echo %date% %time% cmd helper started, waiting for Sirocco (%1) to close>>"%LOG%"
 :wait
 tasklist /FI "PID eq %1" 2>nul | find "%1" >nul
 if not errorlevel 1 (
@@ -596,9 +605,9 @@ if errorlevel 1 (
   echo Could not unpack the update file.>"%DATA%\update-error.txt"
   goto restart
 )
-if not exist "%STAGE%\Pteron.exe" (
-  echo cmd helper: no Pteron.exe in the update>>"%LOG%"
-  echo The update file does not contain Pteron.exe.>"%DATA%\update-error.txt"
+if not exist "%STAGE%\Sirocco.exe" (
+  echo cmd helper: no Sirocco.exe in the update>>"%LOG%"
+  echo The update file does not contain Sirocco.exe.>"%DATA%\update-error.txt"
   goto restart
 )
 robocopy "%STAGE%" "%~3" /E /R:15 /W:1 /NFL /NDL /NJH /NJS /NP >nul
@@ -628,7 +637,7 @@ fn set_install_error(message: Option<String>) {
     }
 }
 
-/// One line in `%APPDATA%\Pteron\update.log` (the helper writes to the same file).
+/// One line in `%APPDATA%\Sirocco\update.log` (the helper writes to the same file).
 fn log_line(text: &str) {
     let Some(dir) = ::dirs::config_dir().map(|d| d.join(crate::pteron::APP_NAME)) else { return };
     let _ = std::fs::create_dir_all(&dir);
@@ -728,7 +737,7 @@ fn launch_installer_inner() -> Result<(), String> {
         for (name, mut command) in helper_commands(&script, &cmd_script, &zip, &dir, &exe) {
             match command.spawn() {
                 Ok(mut child) => {
-                    // The helper waits for Pteron to close, so it must still be running a moment later.
+                    // The helper waits for Sirocco to close, so it must still be running a moment later.
                     std::thread::sleep(Duration::from_millis(900));
                     match child.try_wait() {
                         Ok(Some(status)) => {
@@ -758,7 +767,7 @@ fn launch_installer_inner() -> Result<(), String> {
         let script = update_dir().join("apply.sh");
         std::fs::write(&script, APPLY_SH).map_err(|e| format!("Could not prepare the update: {e}"))?;
         log_line(&format!("starting the update helper for {}", zip.display()));
-        // Its own process group, so it keeps running when Pteron closes.
+        // Its own process group, so it keeps running when Sirocco closes.
         std::process::Command::new("sh")
             .arg(&script)
             .arg(std::process::id().to_string())
@@ -805,12 +814,12 @@ mod tests {
     fn sample(url: &str) -> String {
         serde_json::json!({
             "tag_name": "build-35",
-            "name": "Pteron build 35",
+            "name": "Sirocco build 35",
             "body": "Faster video start.\n- fixes",
             "assets": [
                 {"name": "notes.txt", "browser_download_url": format!("{}notes.txt", download_prefix()), "size": 5},
-                {"name": "Pteron-build-35-win64.zip", "browser_download_url": url, "size": 123456},
-                {"name": "Pteron-build-35-win64.zip.sha256", "browser_download_url": format!("{}Pteron-build-35-win64.zip.sha256", download_prefix()), "size": 90}
+                {"name": "Sirocco-build-35-win64.zip", "browser_download_url": url, "size": 123456},
+                {"name": "Sirocco-build-35-win64.zip.sha256", "browser_download_url": format!("{}Sirocco-build-35-win64.zip.sha256", download_prefix()), "size": 90}
             ]
         })
         .to_string()
@@ -818,7 +827,7 @@ mod tests {
 
     #[test]
     fn reads_a_release() {
-        let url = format!("{}build-35/Pteron-build-35-win64.zip", download_prefix());
+        let url = format!("{}build-35/Sirocco-build-35-win64.zip", download_prefix());
         let release = parse_release_for(&sample(&url), false).unwrap();
         assert_eq!(release.build, 35);
         assert_eq!(release.size, 123456);
@@ -833,10 +842,10 @@ mod tests {
         let text = serde_json::json!({
             "tag_name": "build-62",
             "assets": [
-                {"name": "Pteron-build-62-win64.zip", "browser_download_url": format!("{}build-62/Pteron-build-62-win64.zip", download_prefix()), "size": 10},
-                {"name": "Pteron-build-62-linux64.tar.gz", "browser_download_url": format!("{}build-62/Pteron-build-62-linux64.tar.gz", download_prefix()), "size": 20},
-                {"name": "Pteron-build-62-linux64.tar.gz.sha256", "browser_download_url": format!("{}build-62/Pteron-build-62-linux64.tar.gz.sha256", download_prefix()), "size": 90},
-                {"name": "Pteron-build-62-linux64.tar.gz.sig", "browser_download_url": format!("{}build-62/Pteron-build-62-linux64.tar.gz.sig", download_prefix()), "size": 90}
+                {"name": "Sirocco-build-62-win64.zip", "browser_download_url": format!("{}build-62/Sirocco-build-62-win64.zip", download_prefix()), "size": 10},
+                {"name": "Sirocco-build-62-linux64.tar.gz", "browser_download_url": format!("{}build-62/Sirocco-build-62-linux64.tar.gz", download_prefix()), "size": 20},
+                {"name": "Sirocco-build-62-linux64.tar.gz.sha256", "browser_download_url": format!("{}build-62/Sirocco-build-62-linux64.tar.gz.sha256", download_prefix()), "size": 90},
+                {"name": "Sirocco-build-62-linux64.tar.gz.sig", "browser_download_url": format!("{}build-62/Sirocco-build-62-linux64.tar.gz.sig", download_prefix()), "size": 90}
             ]
         })
         .to_string();
@@ -845,28 +854,29 @@ mod tests {
         let linux = parse_release_for(&text, true).unwrap();
         assert!(linux.url.ends_with("linux64.tar.gz") && linux.size == 20);
         assert!(linux.sha256_url.unwrap().ends_with(".tar.gz.sha256") && linux.sig_url.unwrap().ends_with(".tar.gz.sig"));
-        assert!(parse_release_for(&sample(&format!("{}x/Pteron-build-35-win64.zip", download_prefix())), true).is_none(), "a Windows-only release has nothing for Linux");
+        assert!(parse_release_for(&sample(&format!("{}x/Sirocco-build-35-win64.zip", download_prefix())), true).is_none(), "a Windows-only release has nothing for Linux");
     }
 
     #[test]
     fn refuses_downloads_from_other_places() {
-        assert!(parse_release_for(&sample("https://evil.example/Pteron.zip"), false).is_none());
-        assert!(parse_release_for(&sample("http://github.com/x/y/releases/download/a/Pteron.zip"), false).is_none());
+        assert!(parse_release_for(&sample("https://evil.example/Sirocco.zip"), false).is_none());
+        assert!(parse_release_for(&sample("http://github.com/x/y/releases/download/a/Sirocco.zip"), false).is_none());
         assert!(parse_release("not json").is_none());
         assert!(parse_release("{\"tag_name\":\"latest\",\"assets\":[]}").is_none());
     }
 
     #[test]
     fn repository_name_case_does_not_matter() {
-        let url = format!("{}build-35/Pteron-build-35-win64.zip", download_prefix().replace("pteron", "Pteron"));
+        let url = format!("{}build-35/Sirocco-build-35-win64.zip", download_prefix().replace("pteron", "PTERON"));
         assert!(is_release_url(&url));
+        assert!(is_release_url("https://github.com/Sm0r3s-source/sirocco/releases/download/build-71/Sirocco-build-71-win64.zip"));
         assert!(!is_release_url("https://evil.example/Sm0r3s-source/pteron/releases/download/x.zip"));
     }
 
     #[test]
     fn reads_checksums() {
         let hash = "a".repeat(32) + &"B".repeat(32);
-        assert_eq!(parse_sha256(&format!("{hash}  Pteron.zip\n")), Some(hash.to_ascii_lowercase()));
+        assert_eq!(parse_sha256(&format!("{hash}  Sirocco.zip\n")), Some(hash.to_ascii_lowercase()));
         let certutil = format!("SHA256 hash of file x.zip:\r\n{}\r\nCertUtil: -hashfile command completed successfully.", "0f".repeat(32));
         assert_eq!(parse_sha256(&certutil), Some("0f".repeat(32)));
         assert_eq!(parse_sha256("nothing"), None);

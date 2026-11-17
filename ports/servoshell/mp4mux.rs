@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: merge a separate video stream and audio stream (both fragmented MP4, as YouTube
+//! Sirocco: merge a separate video stream and audio stream (both fragmented MP4, as YouTube
 //! serves them) into ONE ordinary MP4 file that a plain `<video>` element can play and seek in.
 //!
 //! GStreamer (Servo's media engine) cannot seek in a *fragmented* MP4 when the data arrives the
@@ -14,7 +14,7 @@
 //! ```
 //!
 //! * The sample tables come from the small `moof` header of every segment (a few KB each), which
-//!   Pteron downloads once, in parallel, when a video is opened.
+//!   Sirocco downloads once, in parallel, when a video is opened.
 //! * Every chunk is the raw sample data of one segment, copied unchanged and fetched from
 //!   YouTube only when the player asks for those bytes (one range request per chunk).
 //! * The exact size of the whole file is known up front, so byte-range requests (seeking) work.

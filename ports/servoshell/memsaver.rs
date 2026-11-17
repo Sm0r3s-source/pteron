@@ -1,14 +1,14 @@
-//! Pteron: "Memory saver". Gives up some speed and comfort to use less memory, for older or
+//! Sirocco: "Memory saver". Gives up some speed and comfort to use less memory, for older or
 //! low-end computers (Settings > Tabs & memory).
 //!
 //! * the engine's thread pools and web cache are made smaller (applied at start-up),
 //! * the video helper reads less of the video ahead of the player,
 //! * unused tabs go to sleep sooner,
-//! * memory the window no longer needs is handed back to Windows when Pteron is in the
+//! * memory the window no longer needs is handed back to Windows when Sirocco is in the
 //!   background.
 //!
 //! A reading of the memory in use is also written to the crash log now and then, so a
-//! problem report shows how much Pteron was using over time.
+//! problem report shows how much Sirocco was using over time.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -253,7 +253,7 @@ pub(crate) fn set_tabs(count: usize) {
     TABS.store(count, Ordering::Relaxed);
 }
 
-/// Memory in use by Pteron in MB (the working set, close to what Task Manager shows).
+/// Memory in use by Sirocco in MB (the working set, close to what Task Manager shows).
 #[cfg(windows)]
 pub(crate) fn process_mb() -> Option<u64> {
     use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
@@ -291,7 +291,7 @@ pub(crate) fn process_mb() -> Option<u64> {
     None
 }
 
-/// Memory in MB of the programs Pteron started: the system web engine behind compatibility tabs
+/// Memory in MB of the programs Sirocco started: the system web engine behind compatibility tabs
 /// (WebView2, WebKitGTK) runs as separate processes that `process_mb` does not see. Looked up
 /// at most every two seconds.
 pub(crate) fn helpers_mb() -> u64 {

@@ -22,7 +22,7 @@ jobs:
       - name: Unit tests
         run: cargo test --manifest-path pteron_ci/Cargo.toml
 
-  # Every Rust package Pteron and Servo use, checked against the RustSec advisory database.
+  # Every Rust package Sirocco and Servo use, checked against the RustSec advisory database.
   audit:
     runs-on: ubuntu-latest
     steps:

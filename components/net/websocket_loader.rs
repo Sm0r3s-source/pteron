@@ -329,7 +329,7 @@ pub(crate) async fn start_websocket(
         .port_or_known_default()
         .ok_or_else(|| Error::Url(UrlError::UnableToConnect("Unknown port".into())))?;
 
-    // Pteron: the same DNS rebinding guard as for other connections, and an internet page may
+    // Sirocco: the same DNS rebinding guard as for other connections, and an internet page may
     // not open a WebSocket into your computer or home network (for example a program's local
     // control port such as ws://127.0.0.1:9222).
     let name = domain.to_string();

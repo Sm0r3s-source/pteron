@@ -77,7 +77,7 @@ pub struct WebViewCollection {
     /// Whether or not the active WebView in this collection has system focus.
     has_system_focus: bool,
 
-    /// Pteron: split view. These two tabs (left, right) are shown side by side whenever one of
+    /// Sirocco: split view. These two tabs (left, right) are shown side by side whenever one of
     /// them is the active tab.
     split: Option<(WebViewId, WebViewId)>,
 }
@@ -143,18 +143,18 @@ impl WebViewCollection {
         self.webviews.is_empty()
     }
 
-    /// Pteron: the split view pair, if there is one.
+    /// Sirocco: the split view pair, if there is one.
     pub(crate) fn split(&self) -> Option<(WebViewId, WebViewId)> {
         self.split
     }
 
-    /// Pteron: the split view pair while it is on screen (one of the two is the active tab).
+    /// Sirocco: the split view pair while it is on screen (one of the two is the active tab).
     pub(crate) fn shown_split(&self) -> Option<(WebViewId, WebViewId)> {
         let active = self.active_webview_id?;
         self.split.filter(|(left, right)| *left == active || *right == active)
     }
 
-    /// Pteron: start split view with these two tabs (left, right), or end it.
+    /// Sirocco: start split view with these two tabs (left, right), or end it.
     pub(crate) fn set_split(&mut self, split: Option<(WebViewId, WebViewId)>) {
         self.split = split.filter(|(left, right)| {
             left != right && self.webviews.contains_key(left) && self.webviews.contains_key(right)
@@ -168,7 +168,7 @@ impl WebViewCollection {
         assert!(self.creation_order.contains(&id_to_activate));
 
         self.active_webview_id = Some(id_to_activate);
-        // Pteron: in split view the other tab of the pair stays on screen too.
+        // Sirocco: in split view the other tab of the pair stays on screen too.
         let shown = self.shown_split();
         for (webview_id, webview) in self.all_in_creation_order() {
             if self.has_system_focus {
@@ -214,21 +214,21 @@ pub(crate) enum UserInterfaceCommand {
     Forward,
     Reload,
     ReloadAll,
-    /// Pteron: reload the tabs that show the new tab page (after a look or search setting changed).
+    /// Sirocco: reload the tabs that show the new tab page (after a look or search setting changed).
     ReloadNewTabs,
     NewWebView,
-    /// Pteron: reopen the tab that was closed last.
+    /// Sirocco: reopen the tab that was closed last.
     ReopenClosedTab,
     CloseWebView(WebViewId),
-    /// Pteron: open an address in a new tab.
+    /// Sirocco: open an address in a new tab.
     NewTabWithUrl(Url),
-    /// Pteron: pin or unpin a live tab.
+    /// Sirocco: pin or unpin a live tab.
     TogglePin(WebViewId),
-    /// Pteron: pin or unpin the sleeping tab at this index.
+    /// Sirocco: pin or unpin the sleeping tab at this index.
     TogglePinSleeping(usize),
-    /// Pteron: wake the sleeping tab at this index.
+    /// Sirocco: wake the sleeping tab at this index.
     WakeTab(usize),
-    /// Pteron: close the sleeping tab at this index without waking it.
+    /// Sirocco: close the sleeping tab at this index without waking it.
     CloseSleepingTab(usize),
     NewWindow(TopLevelWebViewCreationRequest),
 }
@@ -272,7 +272,7 @@ pub(crate) struct RunningAppState {
     /// The [`UserContentManager`] for all `WebView`s created.
     pub(crate) user_content_manager: Rc<UserContentManager>,
 
-    /// Pteron: the script for dark mode and site styles (see `look::page_script`).
+    /// Sirocco: the script for dark mode and site styles (see `look::page_script`).
     page_look_script: RefCell<Option<Rc<UserScript>>>,
 
     /// Whether or not program exit has been triggered. This means that all windows
@@ -370,7 +370,7 @@ impl RunningAppState {
         window
     }
 
-    /// Pteron: put the current dark mode and site styles into pages (from their next load on)
+    /// Sirocco: put the current dark mode and site styles into pages (from their next load on)
     /// and tell open pages which colour scheme to use.
     pub(crate) fn refresh_page_look(&self) {
         if let Some(old) = self.page_look_script.borrow_mut().take() {
@@ -503,7 +503,7 @@ impl RunningAppState {
         }
     }
 
-    /// Pteron: switches the newer web features chosen in Settings on or off. Skipped while
+    /// Sirocco: switches the newer web features chosen in Settings on or off. Skipped while
     /// the all-in-one experimental switch is on, which owns the same preferences.
     pub(crate) fn apply_compat(&self) {
         if self.experimental_preferences_enabled.get() {
@@ -841,12 +841,12 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn notify_history_changed(&self, webview: WebView, entries: Vec<Url>, current: usize) {
-        // Pteron: Back must not land on a compatibility tab that already handed its site over.
+        // Sirocco: Back must not land on a compatibility tab that already handed its site over.
         if let Some(steps) = crate::compat_view::history_skip(&format!("{:?}", webview.id()), &entries, current) {
             let _ = if steps < 0 { webview.go_back(steps.unsigned_abs()) } else { webview.go_forward(steps.unsigned_abs()) };
         }
         let window = self.window_for_webview(&webview);
-        // Pteron: dark mode for pages may be on for this site and off for the last one.
+        // Sirocco: dark mode for pages may be on for this site and off for the last one.
         webview.notify_theme_change(window.page_theme(entries.get(current)));
         // Pages dropped from the back/forward cache are freed at the next garbage collection.
         if entries.len() > 1 {
@@ -871,7 +871,7 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_move_to(&self, webview: WebView, new_position: DeviceIntPoint) {
-        // Pteron: pages may not move or resize the browser window (window.moveTo/resizeTo could
+        // Sirocco: pages may not move or resize the browser window (window.moveTo/resizeTo could
         // push it off screen or shrink it to nothing); only automated tests may.
         if self.servoshell_preferences.webdriver_port.get().is_none() {
             return;
@@ -898,7 +898,7 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_navigation(&self, webview: WebView, navigation_request: NavigationRequest) {
-        // Pteron: a web page may not send you to a data: address (a whole fake page hidden in the
+        // Sirocco: a web page may not send you to a data: address (a whole fake page hidden in the
         // address, a common phishing trick) or to a file on your computer. Addresses typed into
         // the address bar, and frames whose src is such an address, are not affected.
         let from_web = webview.url().is_some_and(|url| matches!(url.scheme(), "http" | "https"));
@@ -909,7 +909,7 @@ impl WebViewDelegate for RunningAppState {
             crate::downloads::set_notice("Blocked: the page tried to open an address that is not a web page.".to_string());
             return;
         }
-        // Pteron: YouTube videos open in a simple local player page (YouTube's own player
+        // Sirocco: YouTube videos open in a simple local player page (YouTube's own player
         // needs Media Source Extensions, which Servo does not have yet).
         if crate::pteron::settings().youtube_player &&
             let Some(action) = crate::youtube::classify(&navigation_request.url)
@@ -920,19 +920,19 @@ impl WebViewDelegate for RunningAppState {
             }
             return;
         }
-        // Pteron: Google result links open the real address straight away.
+        // Sirocco: Google result links open the real address straight away.
         if let Some(target) = crate::privacy::unwrap_google_link(&navigation_request.url) {
             navigation_request.deny();
             webview.load(target);
             return;
         }
-        // Pteron: sites that need the compatibility tab open there from the start.
+        // Sirocco: sites that need the compatibility tab open there from the start.
         if let Some(page) = crate::compat_view::redirect(&crate::pteron::settings(), &navigation_request.url) {
             navigation_request.deny();
             webview.load(page);
             return;
         }
-        // Pteron: links lose their tracking parts (utm_*, fbclid, ...); the cleaned address
+        // Sirocco: links lose their tracking parts (utm_*, fbclid, ...); the cleaned address
         // goes through these checks again.
         if crate::pteron::settings().strip_tracking &&
             let Some(clean) = crate::privacy::strip_tracking(&navigation_request.url)
@@ -941,7 +941,7 @@ impl WebViewDelegate for RunningAppState {
             webview.load(clean);
             return;
         }
-        // Pteron: plain http sites are checked for an https version, or get a warning page
+        // Sirocco: plain http sites are checked for an https version, or get a warning page
         // first (with a way to go on).
         if crate::secure::needs_warning(&navigation_request.url) &&
             let Some(page) = crate::secure::instead_of(&navigation_request.url)
@@ -950,7 +950,7 @@ impl WebViewDelegate for RunningAppState {
             webview.load(page);
             return;
         }
-        // Pteron: links to files (zip, pdf, exe, ...) are downloaded instead of opened, and
+        // Sirocco: links to files (zip, pdf, exe, ...) are downloaded instead of opened, and
         // only right after a click or key press.
         if crate::downloads::is_download_url(&navigation_request.url) {
             let url = navigation_request.url.clone();
@@ -980,7 +980,7 @@ impl WebViewDelegate for RunningAppState {
             return;
         }
 
-        // Pteron: block pop-ups that were not caused by a click or key press.
+        // Sirocco: block pop-ups that were not caused by a click or key press.
         if !crate::pteron::popup_allowed() {
             crate::pteron::note_popup_blocked();
             return;
@@ -1032,23 +1032,27 @@ impl WebViewDelegate for RunningAppState {
             window.reapply_mute(&webview);
         }
 
-        if status == LoadStatus::Complete {
-            if let Some(url) = webview.url() {
-                crate::library::record_visit(
-                    url.as_str(),
-                    &webview.page_title().unwrap_or_default(),
-                );
-            }
-            if let Some(sender) = self
-                .webdriver_senders
-                .borrow_mut()
-                .load_status_senders
-                .remove(&webview.id())
-            {
-                let _ = sender.send(WebDriverLoadStatus::Complete);
-            }
-            self.maybe_request_screenshot(webview);
+        if status == LoadStatus::Complete &&
+            let Some(url) = webview.url()
+        {
+            // Sirocco: the history page remembers the visit.
+            crate::library::record_visit(url.as_str(), &webview.page_title().unwrap_or_default());
         }
+        let webdriver_status = match status {
+            LoadStatus::Complete => WebDriverLoadStatus::Complete,
+            LoadStatus::Stopped => WebDriverLoadStatus::NavigationStop,
+            _ => return,
+        };
+
+        if let Some(sender) = self
+            .webdriver_senders
+            .borrow_mut()
+            .load_status_senders
+            .remove(&webview.id())
+        {
+            let _ = sender.send(webdriver_status);
+        }
+        self.maybe_request_screenshot(webview);
     }
 
     fn notify_fullscreen_state_changed(&self, webview: WebView, fullscreen_state: bool) {
@@ -1066,7 +1070,7 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_permission(&self, webview: WebView, permission_request: PermissionRequest) {
-        // Pteron: the dialog names the site that asks.
+        // Sirocco: the dialog names the site that asks.
         let site = crate::window::site_of(&webview);
         self.platform_window_for_webview(&webview)
             .show_permission_dialog(webview.id(), permission_request, site);
@@ -1121,8 +1125,6 @@ impl WebViewDelegate for RunningAppState {
         if let Some(window) = self.maybe_window_for_webview(&webview) {
             window.note_media_state(webview.id(), &event);
         }
-        self.platform_window_for_webview(&webview)
-            .notify_media_session_event(event);
     }
 
     fn notify_crashed(&self, webview: WebView, reason: String, backtrace: Option<String>) {
@@ -1131,9 +1133,9 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn load_web_resource(&self, webview: WebView, load: servo::WebResourceLoad) {
-        // Pteron: cancel requests to known ad and tracker networks (and, when switched on,
+        // Sirocco: cancel requests to known ad and tracker networks (and, when switched on,
         // whatever the full filter lists say).
-        let (url, main_frame) = (load.request().url.clone(), load.request().is_for_main_frame);
+        let (url, main_frame) = (load.request().url.clone().into_url(), load.request().is_for_main_frame);
         let destination = format!("{:?}", load.request().destination);
         // A blocked frame gets an empty page instead of a cancelled load: a cancelled frame
         // never finishes, and then the whole page never finishes loading (its load event
@@ -1143,7 +1145,7 @@ impl WebViewDelegate for RunningAppState {
             let started = load.intercept(servo::WebResourceResponse::new(url.clone()));
             if frame { started.finish() } else { started.cancel() }
         };
-        // Pteron: known phishing and malware sites. The page itself becomes a warning (at the
+        // Sirocco: known phishing and malware sites. The page itself becomes a warning (at the
         // site's address); anything else from such a site is not loaded.
         if crate::danger::is_dangerous(&url) {
             if main_frame {
@@ -1162,7 +1164,7 @@ impl WebViewDelegate for RunningAppState {
             refuse(load);
             return;
         }
-        // Pteron: internet sites cannot send requests into your computer or home network.
+        // Sirocco: internet sites cannot send requests into your computer or home network.
         if !main_frame && crate::privacy::blocks_private_request(&url, webview.url().as_ref()) {
             log::warn!("blocked a request from a web page into the local network: {}", url.origin().ascii_serialization());
             refuse(load);
@@ -1170,16 +1172,16 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn show_console_message(&self, webview: WebView, level: ConsoleLogLevel, message: String) {
-        // Pteron: login-form messages from our own page script; never logged (they can hold
+        // Sirocco: login-form messages from our own page script; never logged (they can hold
         // a password).
         if crate::passwords::handle_console(webview.url().as_ref(), &message) {
             return;
         }
-        // Pteron: the "Check this page" report.
+        // Sirocco: the "Check this page" report.
         if crate::sitecheck::handle_console(&message) {
             return;
         }
-        // Pteron: how far the page is scrolled, for tabs that go to sleep.
+        // Sirocco: how far the page is scrolled, for tabs that go to sleep.
         if self
             .maybe_window_for_webview(&webview)
             .is_some_and(|window| window.handle_scroll_message(webview.id(), &message))

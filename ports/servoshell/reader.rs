@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: reading mode. A script runs inside the page, picks out the main article and replaces
+//! Sirocco: reading mode. A script runs inside the page, picks out the main article and replaces
 //! the page with clean text and pictures in the colours of the chosen theme. Closing reading
 //! mode reloads the page.
 

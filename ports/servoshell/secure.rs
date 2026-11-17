@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: warns before opening a page over plain `http` (anyone on the network can read or
+//! Sirocco: warns before opening a page over plain `http` (anyone on the network can read or
 //! change it). The warning page offers the secure `https` version or "continue anyway", which
-//! is remembered for that site until Pteron is closed.
+//! is remembered for that site until Sirocco is closed.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -209,7 +209,7 @@ pub(crate) fn warning_html(page_url: &Url) -> String {
 what you send and change what you see. Do not type passwords or card numbers here.</p>\
 <div class=card><h2>What do you want to do?</h2>\
 <p><a class=btn href=\"{}\">Try the secure version (https)</a></p>\
-<p><a href=\"servo:http-continue?url={}&amp;t={}\">Continue to the site anyway</a> (remembered until you close Pteron)</p>\
+<p><a href=\"servo:http-continue?url={}&amp;t={}\">Continue to the site anyway</a> (remembered until you close Sirocco)</p>\
 <p><a href=\"servo:newtab\">Go to the new tab page</a></p></div>\
 <p class=sub>You can turn this warning off in Settings &rarr; Privacy &amp; data.</p>",
         crate::pteron::PAGE_STYLE_PUBLIC,

@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Pteron: a small ad and tracker blocker. A request to a listed site (or any of its
+//! Sirocco: a small ad and tracker blocker. A request to a listed site (or any of its
 //! sub-domains) that is not the page itself is cancelled before it is sent. The list is short
 //! on purpose: only well-known advertising and tracking networks that pages do not need to work.
 

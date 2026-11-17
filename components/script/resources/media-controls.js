@@ -41,7 +41,7 @@
     }
   };
 
-  // Pteron: the control bar sits at the top of the video. The sliders are drawn by hand
+  // Sirocco: the control bar sits at the top of the video. The sliders are drawn by hand
   // (track, fill, knob); the real range inputs lie invisibly on top and keep working as before.
   function generateMarkup(isAudioOnly) {
     return `
@@ -74,7 +74,7 @@
   }
 
   function formatTime(time, showHours = false) {
-    // Pteron: "m:ss" or "h:mm:ss"; "--:--" when the length is not known.
+    // Sirocco: "m:ss" or "h:mm:ss"; "--:--" when the length is not known.
     if (!Number.isFinite(time) || time < 0) return "--:--";
     time = Math.round(time / 1000);
 
@@ -98,21 +98,26 @@
 
       this.mutationObserver = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
-          // Pteron: chapters and skipped parts for the seek bar (`data-marks` on the video).
+          // Sirocco: chapters and skipped parts for the seek bar (`data-marks` on the video).
           if (mutation.type === "attributes" && mutation.attributeName === "data-marks") {
             this.drawMarks();
             continue;
           }
           // Here we handle the `controls` attribute removal.
           if (mutation.type === "attributes") {
-            this.cleanup();
+            if (this.media.hasAttribute('controls')) {
+              this.initializeDom();
+            } else {
+              this.cleanupDom();
+            }
             return;
           }
           // Here we handle element removal from DOM.
           if (mutation.type === "childList") {
             for (const node of mutation.removedNodes) {
               if (node === this.media) {
-                this.cleanup();
+                this.cleanupDom();
+                this.cleanupCompleteControls();
                 return;
               }
             }
@@ -130,11 +135,26 @@
 
       this.isAudioOnly = this.media.localName == "audio";
 
+      // We also render the shadowtree for cues, which means that the
+      // controls scripts run, but we don't want to show anything.
+      // The above mutation observer then ensures that the controls do
+      // render if at a later stage these controls should be shown.
+      if (this.media.hasAttribute('controls')) {
+        this.initializeDom();
+      }
+    }
+
+    initializeDom() {
+      // Do not reinitialize twice
+      if (this.root) {
+        return;
+      }
+
       // Create root element and load markup.
       this.root = document.createElement("div");
-      this.root.classList.add("root");
+      this.root.classList.add("controls-container");
       this.root.innerHTML = generateMarkup(this.isAudioOnly);
-      this.controls.appendChild(this.root);
+      this.controls.firstChild.appendChild(this.root);
 
 
       const elementNames = [
@@ -244,7 +264,7 @@
         this.scrubbing = false;
         this.render();
       }, () => { this.scrubbing = true; });
-      // Pteron: the time (and chapter) under the mouse on the seek bar.
+      // Sirocco: the time (and chapter) under the mouse on the seek bar.
       this.elements.progress.addEventListener("mousemove", e => this.showSeekTip(e));
       this.elements.progress.addEventListener("mouseleave", () => this.elements.progressTip.classList.add("hidden"));
       this.drawMarks();
@@ -271,7 +291,7 @@
         el.addEventListener(type, this);
       });
 
-      // Pteron: hide the bar while a video plays and the mouse is idle.
+      // Sirocco: hide the bar while a video plays and the mouse is idle.
       this.idleTimer = null;
       this.setCursorHidden = hide => {
         if (hide && this.maximized) {
@@ -297,7 +317,7 @@
         this.controls.addEventListener(name, this.wake);
       });
 
-      // Pteron: leave maximized mode when the window leaves real fullscreen (Esc, etc.).
+      // Sirocco: leave maximized mode when the window leaves real fullscreen (Esc, etc.).
       this.onFullscreenChange = () => {
         if (document.fullscreenElement) {
           this.sawFullscreen = true;
@@ -343,17 +363,25 @@
       this.onStateChange(null);
     }
 
-    cleanup() {
+    cleanupDom() {
       document.removeEventListener("fullscreenchange", this.onFullscreenChange);
       clearTimeout(this.idleTimer);
-      this.mutationObserver.disconnect();
-      this.mutationObserver = null;
+      if (!this.root) {
+        return;
+      }
       this.mediaEvents.forEach(event => {
         this.media.removeEventListener(event, this);
       });
       this.controlEvents.forEach(({ el, type }) => {
         el.removeEventListener(type, this);
       });
+      this.root.remove();
+      this.root = null;
+    }
+
+    cleanupCompleteControls() {
+      this.mutationObserver.disconnect();
+      this.mutationObserver = null;
       this.media = null;
       this.controls = null;
     }
@@ -410,7 +438,7 @@
       this.syncSliders();
     }
 
-    // Pteron: chapter lines and skipped parts (SponsorBlock) on the seek bar. The page puts them
+    // Sirocco: chapter lines and skipped parts (SponsorBlock) on the seek bar. The page puts them
     // on the video as `data-marks`: [{"s": start, "e": end (parts only), "t": title, "k": "ch" | "sb"}].
     readMarks() {
       try {
@@ -447,7 +475,7 @@
       }
     }
 
-    // Pteron: while pointing at the seek bar, show the time (and chapter) there.
+    // Sirocco: while pointing at the seek bar, show the time (and chapter) there.
     showSeekTip(event) {
       const tip = this.elements.progressTip;
       const slider = this.elements.progress;
@@ -472,7 +500,7 @@
       tip.classList.remove("hidden");
     }
 
-    // Pteron: move the drawn fill and knob to match the (invisible) range inputs.
+    // Sirocco: move the drawn fill and knob to match the (invisible) range inputs.
     syncSliders() {
       const pairs = [
         [this.elements.progress, this.elements.progressFill, this.elements.progressKnob],
@@ -586,7 +614,7 @@
       this.media.muted = !this.media.muted;
     }
 
-    // Pteron: real fullscreen. Servo's own top-layer fullscreen draws a video offset, so the
+    // Sirocco: real fullscreen. Servo's own top-layer fullscreen draws a video offset, so the
     // video is "maximized" with fixed positioning to fill the page, and the whole *document*
     // is asked for fullscreen (not the video), which makes the window itself go fullscreen.
     toggleFullscreen() {
@@ -701,7 +729,7 @@
       });
     }
 
-    // Pteron: the real length; when the engine cannot tell (it reports Infinity), the page
+    // Sirocco: the real length; when the engine cannot tell (it reports Infinity), the page
     // can give it in a data-duration attribute.
     get length() {
       const d = this.media.duration;
