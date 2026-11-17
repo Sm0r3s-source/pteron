@@ -34,6 +34,7 @@ mod find;
 mod music;
 mod reader;
 mod report;
+mod password_import;
 mod passwords;
 mod compat;
 mod compat_host;

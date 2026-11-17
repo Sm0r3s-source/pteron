@@ -1107,6 +1107,27 @@ fn privacy_section(
             if logins.len() > 1 && ui.button("Delete all saved logins").clicked() {
                 crate::passwords::delete_all();
             }
+            ui.add_space(8.0);
+            ui.label("Bring logins from another browser:");
+            ui.horizontal_wrapped(|ui| {
+                #[cfg(windows)]
+                for (name, dir) in crate::password_import::browsers() {
+                    if ui.button(format!("Import from {name}")).on_hover_text("Close that browser first. Only passwords come over, not logged-in sessions.").clicked() {
+                        crate::passwords::import_browser(dir);
+                    }
+                }
+                if ui.button("Import from a CSV file...").on_hover_text("Firefox, Opera, Bitwarden and others: export your passwords as CSV, then choose the file.").clicked() {
+                    if let Some(path) = crate::passwords::pick_csv() {
+                        crate::passwords::import_csv_file(path);
+                    }
+                }
+            });
+            if let Some(text) = crate::passwords::import_status().filter(|t| !t.is_empty()) {
+                ui.label(egui::RichText::new(text.clone()).weak());
+                if text == "Importing..." {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+                }
+            }
             let never = crate::passwords::never_list();
             if !never.is_empty() {
                 ui.add_space(8.0);

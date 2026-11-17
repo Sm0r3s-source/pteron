@@ -10577,6 +10577,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "ring",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",

@@ -3,12 +3,12 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 :root {
-  --bg: #14161a;
+  --bg: #1a1613;
   --bg-glow: rgba(240, 122, 77, 0.13);
-  --text: #ecebe8;
-  --muted: #8f96a3;
-  --field: #1b1e24;
-  --field-border: #262a33;
+  --text: #f0ebe5;
+  --muted: #9a8f86;
+  --field: #25201c;
+  --field-border: #342d27;
   --gold: #f07a4d;
   --gold-soft: rgba(240, 122, 77, 0.30);
 }
@@ -262,3 +262,5 @@ body *:not(input)::selection { background: transparent; color: inherit; }
 input { -webkit-user-select: text; user-select: text; }
 input { caret-color: #e0603a; }
 img { -webkit-user-drag: none; pointer-events: none; }
+
+.wordmark { margin: 12px 0 22px; font-size: 15px; font-weight: 500; letter-spacing: .32em; text-transform: uppercase; color: var(--muted); }

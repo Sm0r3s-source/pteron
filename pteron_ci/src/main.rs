@@ -57,6 +57,8 @@ mod look;
 mod signing;
 #[path = "../../ports/servoshell/multisearch.rs"]
 mod multisearch;
+#[path = "../../ports/servoshell/password_import.rs"]
+mod password_import;
 #[path = "../../ports/servoshell/passwords.rs"]
 mod passwords;
 #[path = "../../ports/servoshell/adblock.rs"]

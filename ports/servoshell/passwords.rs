@@ -765,6 +765,111 @@ pub(crate) fn set_enabled(on: bool) {
     save_vault_now();
 }
 
+/// Lock many passwords at once (one PowerShell start on Windows instead of one each).
+fn protect_many(plains: &[String]) -> Vec<Option<String>> {
+    #[cfg(windows)]
+    {
+        let encoded: Vec<String> = plains.iter().map(|p| crate::util::b64_encode(p.as_bytes())).collect();
+        if let Ok(done) = crate::password_import::dpapi_lines(Some("Pteron-passwords-v1"), true, &encoded) {
+            return done.into_iter().map(|b| (!b.is_empty()).then_some(b)).collect();
+        }
+        Vec::new()
+    }
+    #[cfg(not(windows))]
+    plains.iter().map(|p| protect(p).ok()).collect()
+}
+
+/// Add logins taken from another browser. Sites that Sirocco would not save (not https) and
+/// logins it already has are skipped. Returns a sentence to show.
+pub(crate) fn import(entries: Vec<crate::password_import::Entry>, skipped: usize) -> String {
+    let mut fresh: Vec<(String, String, String)> = Vec::new();
+    for (url, user, pass) in entries {
+        let Some(host) = Url::parse(&url).ok().as_ref().and_then(site_key) else { continue };
+        if !fresh.iter().any(|(h, u, _)| *h == host && *u == user) {
+            fresh.push((host, user, pass));
+        }
+    }
+    let have = with_vault(|v| v.logins.iter().map(|l| (l.host.clone(), l.user.clone())).collect::<Vec<_>>());
+    fresh.retain(|(h, u, _)| !have.iter().any(|(vh, vu)| vh == h && vu == u));
+    let room = MAX_LOGINS.saturating_sub(have.len());
+    fresh.truncate(room);
+    let blobs = protect_many(&fresh.iter().map(|(_, _, p)| p.clone()).collect::<Vec<_>>());
+    if blobs.len() != fresh.len() {
+        return "Could not lock the passwords, nothing was imported.".into();
+    }
+    let mut added = 0;
+    with_vault(|v| {
+        for ((host, user, _), blob) in fresh.into_iter().zip(blobs) {
+            if let Some(pw) = blob {
+                v.logins.push(Login { host, user, pw });
+                added += 1;
+            }
+        }
+    });
+    save_vault_now();
+    let mut message = format!("Imported {added} login{}.", if added == 1 { "" } else { "s" });
+    if skipped > 0 {
+        message.push_str(&format!(" {skipped} could not be opened (try a CSV export for those)."));
+    }
+    message
+}
+
+static IMPORT_STATUS: Mutex<Option<String>> = Mutex::new(None);
+
+/// The result of the last import ("Importing...", "Imported 12 logins.").
+pub(crate) fn import_status() -> Option<String> {
+    IMPORT_STATUS.lock_ok().clone()
+}
+
+fn run_import(job: impl FnOnce() -> String + Send + 'static) {
+    if IMPORT_STATUS.lock_ok().as_deref() == Some("Importing...") {
+        return;
+    }
+    *IMPORT_STATUS.lock_ok() = Some("Importing...".into());
+    std::thread::Builder::new()
+        .name("pteron-passwords-import".into())
+        .spawn(move || {
+            let text = job();
+            *IMPORT_STATUS.lock_ok() = Some(text);
+        })
+        .ok();
+}
+
+/// Ask which CSV file to import (the real dialog is not part of the unit tests).
+#[cfg(not(test))]
+pub(crate) fn pick_csv() -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new().add_filter("Password export (CSV)", &["csv"]).pick_file()
+}
+
+#[cfg(test)]
+pub(crate) fn pick_csv() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Import a CSV file exported from another browser or password manager.
+pub(crate) fn import_csv_file(path: std::path::PathBuf) {
+    run_import(move || {
+        let Ok(text) = std::fs::read_to_string(&path) else { return "Could not read that file.".into() };
+        match crate::password_import::from_csv(&text) {
+            Some(entries) => {
+                let mut message = import(entries, 0);
+                message.push_str(" Delete the CSV file now: it holds your passwords in plain text.");
+                message
+            },
+            None => "That file does not look like a password export (no URL, user name and password columns).".into(),
+        }
+    });
+}
+
+/// Read the saved logins of Chrome, Edge or Brave on this Windows account.
+#[cfg(windows)]
+pub(crate) fn import_browser(dir: std::path::PathBuf) {
+    run_import(move || match crate::password_import::from_chromium(&dir) {
+        Ok(found) => import(found.entries, found.skipped),
+        Err(message) => message,
+    });
+}
+
 /// Every saved login as (site, user name).
 pub(crate) fn list() -> Vec<(String, String)> {
     with_vault(|v| v.logins.iter().map(|l| (l.host.clone(), l.user.clone())).collect())
