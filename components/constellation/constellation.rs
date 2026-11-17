@@ -3366,12 +3366,12 @@ where
             webview_id,
             viewport_details,
             user_content_manager_id,
+            is_private,
         }: NewWebViewDetails,
     ) {
         let pipeline_id = PipelineId::new();
         let browsing_context_id = BrowsingContextId::from(webview_id);
         let load_data = LoadData::new_for_new_unrelated_webview(url);
-        let is_private = false;
 
         // Register this new top-level browsing context id as a webview and set
         // its focused browsing context to be itself.
@@ -3732,6 +3732,7 @@ where
             webview_id: new_webview_id,
             viewport_details,
             user_content_manager_id,
+            ..
         } = match webview_id_receiver.recv() {
             Ok(Some(new_webview_details)) => new_webview_details,
             Ok(None) | Err(_) => {

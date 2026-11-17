@@ -684,10 +684,65 @@ impl std::error::Error for ConnectionError {
     }
 }
 
+/// Sirocco: where private tabs connect (a local SOCKS5 gateway; Sirocco's built-in Tor, or a proxy
+/// of the user's own). Nothing set means private tabs cannot connect at all.
+static PRIVATE_GATEWAY: std::sync::RwLock<Option<std::net::SocketAddr>> = std::sync::RwLock::new(None);
+
+pub fn set_private_gateway(address: Option<std::net::SocketAddr>) {
+    if let Ok(mut gateway) = PRIVATE_GATEWAY.write() {
+        *gateway = address;
+    }
+}
+
+/// Open a connection to `host:port` through the private gateway (SOCKS5 with the name sent along,
+/// so the name is looked up on the far side, not on this computer). Fails closed.
+pub async fn private_connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fail = |text: &str| std::io::Error::new(std::io::ErrorKind::NotConnected, text.to_string());
+    let gateway = PRIVATE_GATEWAY.read().ok().and_then(|gateway| *gateway);
+    let Some(gateway) = gateway else {
+        return Err(fail("private tabs: the private connection (Tor) is not ready"));
+    };
+    if host.is_empty() || host.len() > 255 {
+        return Err(fail("private tabs: bad host name"));
+    }
+    let mut stream = TcpStream::connect(gateway).await?;
+    stream.write_all(&[5, 1, 0]).await?;
+    let mut answer = [0u8; 2];
+    stream.read_exact(&mut answer).await?;
+    if answer != [5, 0] {
+        return Err(fail("private tabs: the gateway refused the handshake"));
+    }
+    let mut request = vec![5, 1, 0, 3, host.len() as u8];
+    request.extend_from_slice(host.as_bytes());
+    request.extend_from_slice(&port.to_be_bytes());
+    stream.write_all(&request).await?;
+    let mut head = [0u8; 4];
+    stream.read_exact(&mut head).await?;
+    if head[0] != 5 || head[1] != 0 {
+        return Err(fail(&format!("private tabs: the gateway could not connect (code {})", head[1])));
+    }
+    let rest = match head[3] {
+        1 => 4 + 2,
+        4 => 16 + 2,
+        3 => {
+            let mut len = [0u8; 1];
+            stream.read_exact(&mut len).await?;
+            len[0] as usize + 2
+        },
+        _ => return Err(fail("private tabs: bad gateway answer")),
+    };
+    let mut skip = vec![0u8; rest];
+    stream.read_exact(&mut skip).await?;
+    Ok(stream)
+}
+
 #[derive(Clone)]
 /// A proxy connector. This will automatically open a proxy connection if the uri matches the proxy uri.
 /// Also respects 'no_proxy'.
 pub struct ProxyConnector {
+    /// Sirocco: a private tab's connector. It only ever connects through the private gateway.
+    private: bool,
     /// A client without proxy for `no_proxy` matches.
     client: ServoHttpConnector,
     /// Matcher to see if we should forward to the proxy or not.
@@ -695,12 +750,13 @@ pub struct ProxyConnector {
 }
 
 impl ProxyConnector {
-    fn new() -> Self {
+    fn new(private: bool) -> Self {
         let matcher_builder = hyper_util::client::proxy::matcher::Matcher::builder()
             .http(servo_config::pref!(network_http_proxy_uri))
             .https(servo_config::pref!(network_https_proxy_uri))
             .no(servo_config::pref!(network_http_no_proxy));
         ProxyConnector {
+            private,
             client: ServoHttpConnector::new(),
             matcher: std::sync::Arc::new(matcher_builder.build()),
         }
@@ -721,6 +777,17 @@ impl Service<Destination> for ProxyConnector {
     }
 
     fn call(&mut self, req: Destination) -> Self::Future {
+        if self.private {
+            // Sirocco: no direct connection, no local DNS lookup; the gateway resolves the name.
+            let host = req.host().unwrap_or_default().trim_start_matches('[').trim_end_matches(']').to_string();
+            let port = req.port_u16().unwrap_or(if req.scheme_str() == Some("https") { 443 } else { 80 });
+            return Box::pin(async move {
+                private_connect(&host, port)
+                    .await
+                    .map(TokioIo::new)
+                    .map_err(|error| ConnectionError::ProxyError(BoxError::from(error)))
+            });
+        }
         match self.matcher.intercept(&req) {
             Some(intercept) => {
                 let mut tunnel = Tunnel::new(intercept.uri().clone(), self.client.clone());
@@ -744,13 +811,13 @@ impl Service<Destination> for ProxyConnector {
 
 pub type ServoClient = Client<InstrumentedConnector<ProxyConnector>, BoxedBody>;
 
-pub fn create_http_client(tls_config: TlsConfig) -> ServoClient {
+pub fn create_http_client(tls_config: TlsConfig, private: bool) -> ServoClient {
     let connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_tls_config(tls_config)
         .https_or_http()
         .enable_http1()
         .enable_http2()
-        .wrap_connector(ProxyConnector::new());
+        .wrap_connector(ProxyConnector::new(private));
 
     Client::builder(TokioExecutor {})
         .http1_title_case_headers(true)

@@ -43,7 +43,19 @@ pub(crate) struct Suggestion {
     pub bookmarked: bool,
 }
 
+/// A search you made (kept apart from the pages, so it can be browsed and cleared on its own).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Search {
+    pub query: String,
+    pub count: u32,
+    pub last: u64,
+}
+
+const MAX_SEARCHES: usize = 1000;
+
 struct Data {
+    searches: Vec<Search>,
+    searches_dirty: bool,
     history: Vec<Entry>,
     bookmarks: Vec<Bookmark>,
     history_dirty: bool,
@@ -137,7 +149,25 @@ fn load() -> Data {
             })
         })
         .unwrap_or_default();
+    let searches = read_json("searches.json")
+        .and_then(|value| {
+            value.get("searches").and_then(|v| v.as_array()).map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        Some(Search {
+                            query: item.get("q")?.as_str()?.to_string(),
+                            count: item.get("n").and_then(|v| v.as_u64()).unwrap_or(1) as u32,
+                            last: item.get("last").and_then(|v| v.as_u64()).unwrap_or(0),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default();
     Data {
+        searches,
+        searches_dirty: false,
         history,
         bookmarks,
         history_dirty: false,
@@ -194,10 +224,78 @@ fn save_bookmarks(data: &Data) {
     write_json("bookmarks.json", &serde_json::json!({ "bookmarks": items }));
 }
 
+/// The words searched for, when `url` is a results page of a search engine.
+pub(crate) fn search_query(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.trim_start_matches("www.").to_ascii_lowercase();
+    let mut engines: Vec<String> = crate::pteron::ENGINES
+        .iter()
+        .filter_map(|(_, _, template)| url::Url::parse(&template.replace("%s", "x")).ok())
+        .filter_map(|u| u.host_str().map(|h| h.trim_start_matches("www.").to_ascii_lowercase()))
+        .collect();
+    let settings = crate::pteron::settings();
+    if settings.engine == crate::pteron::SEARXNG_ID {
+        let template = crate::pteron::search_url_for(&settings).replace("%s", "x");
+        engines.extend(url::Url::parse(&template).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)));
+    }
+    if !engines.contains(&host) || !matches!(parsed.path(), "/" | "/search" | "/html" | "/html/" | "/do/search" | "/search/") {
+        return None;
+    }
+    let query = parsed.query_pairs().find(|(name, _)| name == "q")?.1.trim().to_string();
+    (!query.is_empty() && query.chars().count() <= 200).then_some(query)
+}
+
+fn record_search(query: &str) {
+    let now = now_secs();
+    with(|data| {
+        if let Some(found) = data.searches.iter_mut().find(|s| s.query.eq_ignore_ascii_case(query)) {
+            found.count = found.count.saturating_add(1);
+            found.last = now;
+        } else {
+            data.searches.push(Search { query: query.to_string(), count: 1, last: now });
+            if data.searches.len() > MAX_SEARCHES {
+                if let Some(oldest) = data.searches.iter().enumerate().min_by_key(|(_, s)| s.last).map(|(i, _)| i) {
+                    data.searches.swap_remove(oldest);
+                }
+            }
+        }
+        data.searches_dirty = true;
+    });
+}
+
+fn save_searches(data: &mut Data) {
+    let items: Vec<serde_json::Value> =
+        data.searches.iter().map(|s| serde_json::json!({ "q": s.query, "n": s.count, "last": s.last })).collect();
+    write_json("searches.json", &serde_json::json!({ "searches": items }));
+    data.searches_dirty = false;
+}
+
+/// Searches whose words contain every word of `query`, the newest first.
+pub(crate) fn search_searches(query: &str, max: usize) -> Vec<Search> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut found: Vec<Search> = with(|data| {
+        data.searches.iter().filter(|s| words.iter().all(|w| s.query.to_lowercase().contains(w.as_str()))).cloned().collect()
+    })
+    .unwrap_or_default();
+    found.sort_by(|a, b| b.last.cmp(&a.last));
+    found.truncate(max);
+    found
+}
+
+pub(crate) fn remove_search(query: &str) {
+    with(|data| {
+        data.searches.retain(|s| !s.query.eq_ignore_ascii_case(query));
+        save_searches(data);
+    });
+}
+
 /// Remember a finished page load.
 pub(crate) fn record_visit(url: &str, title: &str) {
     if !is_web(url) || !crate::pteron::settings().history_enabled {
         return;
+    }
+    if let Some(query) = search_query(url) {
+        record_search(&query);
     }
     let url = normalize(url);
     let now = now_secs();
@@ -258,6 +356,9 @@ pub(crate) fn update_title(url: &str, title: &str) {
 /// Write the history to disk if it changed (at most every few seconds). Cheap to call often.
 pub(crate) fn flush() {
     with(|data| {
+        if data.searches_dirty {
+            save_searches(data);
+        }
         if !data.history_dirty {
             return;
         }
@@ -273,7 +374,9 @@ pub(crate) fn flush() {
 pub(crate) fn clear_history() {
     with(|data| {
         data.history.clear();
+        data.searches.clear();
         save_history(data);
+        save_searches(data);
     });
 }
 
@@ -324,8 +427,13 @@ pub(crate) fn history_html(page: &url::Url) -> String {
     let query = pairs.get("q").map(|q| q.trim().to_string()).unwrap_or_default();
     let allowed = pairs.get("t").map(String::as_str) == Some(history_token());
     let token = history_token();
-    let back = format!("servo:history?q={}", encode(&query));
+    let searches_tab = pairs.get("tab").map(String::as_str) == Some("searches");
+        let back = format!("servo:history?q={}{}", encode(&query), if searches_tab { "&tab=searches" } else { "" });
     if allowed {
+        if let Some(text) = pairs.get("delsearch") {
+            remove_search(text);
+            return format!("<!doctype html><meta charset=utf-8><script>location.replace({:?})</script>", back);
+        }
         if let Some(url) = pairs.get("del") {
             remove_from_history(url);
             return format!("<!doctype html><meta charset=utf-8><script>location.replace({:?})</script>", back);
@@ -343,11 +451,44 @@ pub(crate) fn history_html(page: &url::Url) -> String {
 <p><a class=btn href=\"servo:history?clear=yes&amp;t={token}\">Clear all history</a> &nbsp; <a href=\"servo:history\">Cancel</a></p>"
         );
     }
-    let entries = search_history(&query, 500);
+    let entries = if searches_tab { Vec::new() } else { search_history(&query, 500) };
+    let found_searches = if searches_tab { search_searches(&query, 500) } else { Vec::new() };
     let now = crate::crashlog::unix_secs(std::time::SystemTime::now());
     let today = crate::crashlog::day_number(now);
     let mut list = String::new();
     let mut day = None;
+    if searches_tab {
+        let template = crate::pteron::search_url();
+        for found in &found_searches {
+            let this_day = crate::crashlog::day_number(found.last as i64);
+            if day != Some(this_day) {
+                if day.is_some() {
+                    list.push_str("</div>");
+                }
+                day = Some(this_day);
+                let name = match today - this_day {
+                    0 => "Today".to_string(),
+                    1 => "Yesterday".to_string(),
+                    _ => {
+                        let (y, m, d) = crate::crashlog::civil_from_days(this_day);
+                        format!("{y}-{m:02}-{d:02}")
+                    },
+                };
+                list.push_str(&format!("<h2>{name}</h2><div class=card>"));
+            }
+            let again = template.replace("%s", &crate::pteron::encode_query(&found.query));
+            let times = if found.count > 1 { format!("{} times", found.count) } else { String::new() };
+            list.push_str(&format!(
+                "<div class=h><a class=t href=\"{}\">{}</a><span class=sub>{}</span>\
+<a class=x href=\"servo:history?tab=searches&amp;delsearch={}&amp;t={token}&amp;q={}\" title=\"Remove this search\">&times;</a></div>",
+                escape_html(&again),
+                escape_html(&found.query),
+                times,
+                encode(&found.query),
+                encode(&query),
+            ));
+        }
+    }
     for entry in &entries {
         let this_day = crate::crashlog::day_number(entry.last as i64);
         if day != Some(this_day) {
@@ -383,7 +524,15 @@ pub(crate) fn history_html(page: &url::Url) -> String {
     if day.is_some() {
         list.push_str("</div>");
     }
-    if entries.is_empty() {
+    if searches_tab && found_searches.is_empty() {
+        list = if !query.is_empty() {
+            format!("<p class=sub>No searches match <b>{}</b>.</p>", escape_html(&query))
+        } else if crate::pteron::settings().history_enabled {
+            "<p class=sub>No searches yet. What you search for shows up here.</p>".into()
+        } else {
+            "<p class=sub>History is turned off (Settings &rarr; Privacy &amp; data).</p>".into()
+        };
+    } else if !searches_tab && entries.is_empty() {
         list = if !query.is_empty() {
             format!("<p class=sub>No pages match <b>{}</b>.</p>", escape_html(&query))
         } else if crate::pteron::settings().history_enabled {
@@ -394,17 +543,23 @@ pub(crate) fn history_html(page: &url::Url) -> String {
     }
     format!(
         "<!doctype html><title>History</title>{style}\
-<style>.h{{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(128,128,128,.15)}}\
-.h:last-child{{border-bottom:0}}.h .t{{flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}}\
-.h .sub{{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}}\
-.h .x{{text-decoration:none;font-size:18px;opacity:.5;padding:0 6px}}.h .x:hover{{opacity:1}}\
-form{{display:flex;gap:8px;margin:12px 0}}form input{{flex:1;padding:8px 10px;font-size:15px}}</style>\
-<h1>History</h1><form action=\"servo:history\"><input name=q value=\"{}\" placeholder=\"Search history\" autofocus>\
+<style>.h{{display:flex;align-items:center;gap:10px;padding:7px 0}}\
+.h .t{{flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62%}}\
+.h .sub{{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0;font-size:13px}}\
+.h .x{{color:var(--mut);font-size:18px;padding:0 6px;opacity:0}}.h:hover .x{{opacity:.8}}.h .x:hover{{opacity:1;text-decoration:none}}\
+form{{display:flex;gap:8px;margin:14px 0 8px}}form input{{flex:1}}</style>\
+<h1>History</h1>\
+<div class=tabs><a class=\"{}\" href=\"servo:history\">Pages</a><a class=\"{}\" href=\"servo:history?tab=searches\">Searches</a></div>\
+<form action=\"servo:history\">{}<input name=q value=\"{}\" placeholder=\"{}\" autofocus>\
 <button class=btn>Search</button></form>\
 <p class=sub>{}{} &middot; <a href=\"servo:history?clear=ask\">Clear all history</a></p>{list}",
+        if searches_tab { "" } else { "on" },
+        if searches_tab { "on" } else { "" },
+        if searches_tab { "<input type=hidden name=tab value=searches>" } else { "" },
         escape_html(&query),
-        if query.is_empty() { "Newest first" } else { "Matching pages" },
-        if entries.len() == 500 { " (the first 500)" } else { "" },
+        if searches_tab { "Search your searches" } else { "Search history" },
+        if query.is_empty() { "Newest first" } else if searches_tab { "Matching searches" } else { "Matching pages" },
+        if entries.len() == 500 || found_searches.len() == 500 { " (the first 500)" } else { "" },
     )
 }
 
@@ -893,4 +1048,17 @@ mod tests {
         assert!(!xss.contains("<script>") && xss.contains("&lt;script&gt;"));
     }
 
+
+    #[test]
+    fn searches_are_read_from_results_pages() {
+        assert_eq!(search_query("https://www.google.com/search?q=rust+lang&hl=en").as_deref(), Some("rust lang"));
+        assert_eq!(search_query("https://duckduckgo.com/html/?q=cats%20and%20dogs").as_deref(), Some("cats and dogs"));
+        assert_eq!(search_query("https://www.bing.com/search?q=x").as_deref(), Some("x"));
+        assert_eq!(search_query("https://search.brave.com/search?q=a&source=web").as_deref(), Some("a"));
+        // not a search engine, or not a results page, or empty
+        assert_eq!(search_query("https://example.com/search?q=rust"), None);
+        assert_eq!(search_query("https://www.google.com/maps?q=rust"), None);
+        assert_eq!(search_query("https://www.google.com/search?q="), None);
+        assert_eq!(search_query("https://www.google.com/search?hl=en"), None);
+    }
 }

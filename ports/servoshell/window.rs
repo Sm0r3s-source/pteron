@@ -193,6 +193,10 @@ pub(crate) struct ServoShellWindow {
     muted: RefCell<HashSet<WebViewId>>,
     /// Sirocco: pinned tabs.
     pinned: RefCell<HashSet<WebViewId>>,
+    /// Sirocco: private (incognito) tabs, and whether the next tab made should be one.
+    private: RefCell<HashSet<WebViewId>>,
+    next_private: Cell<bool>,
+    next_private_marked: Cell<bool>,
     /// Sirocco: tabs the user asked to keep awake (they never go to sleep).
     awake: RefCell<HashSet<WebViewId>>,
     /// Sirocco: split view. Where the divider is (0 to 1 across the page area), and the two
@@ -231,6 +235,9 @@ impl ServoShellWindow {
             media_playing: Default::default(),
             muted: Default::default(),
             pinned: Default::default(),
+            private: Default::default(),
+            next_private: Cell::new(false),
+            next_private_marked: Cell::new(false),
             awake: Default::default(),
             split_ratio: Cell::new(0.5),
             panes: Cell::new(None),
@@ -264,8 +271,10 @@ impl ServoShellWindow {
         let mut webview_builder = match creation_type {
             TopLevelWebViewCreationRequest::WithUrl(url) => {
                 // Sirocco: sites on the compatibility list open there from the first load.
-                let url = crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url);
+                let private = self.next_private.replace(false);
+                let url = if private { url } else { crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url) };
                 WebViewBuilder::new(state.servo(), self.platform_window.rendering_context())
+                    .private(private)
                     .url(url)
             },
             TopLevelWebViewCreationRequest::WithCreateRequest(request) => {
@@ -286,6 +295,10 @@ impl ServoShellWindow {
         }
 
         let webview = webview_builder.build();
+        if self.next_private_marked.replace(false) {
+            self.private.borrow_mut().insert(webview.id());
+            crate::tor::acquire();
+        }
         self.add_webview(webview.clone());
 
         // If `self` is not in `state.windows`, our notify_accessibility_tree_update() will panic.
@@ -527,6 +540,7 @@ impl ServoShellWindow {
         };
         drop(webview_collection);
         if remember &&
+            !self.is_private(webview_id) &&
             let Some(url) = closed.url().filter(|url| matches!(url.scheme(), "http" | "https"))
         {
             let mut list = self.closed_tabs.borrow_mut();
@@ -541,6 +555,9 @@ impl ServoShellWindow {
         self.media_playing.borrow_mut().remove(&webview_id);
         self.muted.borrow_mut().remove(&webview_id);
         self.pinned.borrow_mut().remove(&webview_id);
+        if self.private.borrow_mut().remove(&webview_id) {
+            crate::tor::release();
+        }
         self.awake.borrow_mut().remove(&webview_id);
         self.platform_window
             .dismiss_embedder_controls_for_webview(webview_id);
@@ -700,6 +717,11 @@ impl ServoShellWindow {
     }
 
     /// Sirocco: is this tab pinned?
+    /// Sirocco: is this a private (incognito) tab?
+    pub(crate) fn is_private(&self, id: WebViewId) -> bool {
+        self.private.borrow().contains(&id)
+    }
+
     pub(crate) fn is_pinned(&self, id: WebViewId) -> bool {
         self.pinned.borrow().contains(&id)
     }
@@ -750,6 +772,9 @@ impl ServoShellWindow {
             .webviews()
             .into_iter()
             .filter_map(|(id, webview)| {
+                if self.is_private(id) {
+                    return None;
+                }
                 let url = webview.url().filter(|url| matches!(url.scheme(), "http" | "https"))?;
                 Some(crate::pteron::SavedTab {
                     url: url.to_string(),
@@ -832,6 +857,7 @@ impl ServoShellWindow {
                 .filter(|(id, _)| {
                     !awake.contains(id) && !shown.is_some_and(|(left, right)| left == *id || right == *id)
                 })
+                .filter(|(id, _)| !self.is_private(*id))
                 .filter(|(_, webview)| {
                     webview.url().is_some_and(|url| matches!(url.scheme(), "http" | "https"))
                 })
@@ -996,7 +1022,8 @@ impl ServoShellWindow {
                     if let Some(active_webview) = self.active_webview() {
                         // (Typed addresses do not pass the navigation check, so the lists apply here too.)
                         let url = url.into_url();
-                        active_webview.load(crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url));
+                        let url = if self.is_private(active_webview.id()) { url } else { crate::compat_view::redirect(&crate::pteron::settings(), &url).unwrap_or(url) };
+                        active_webview.load(url);
                     }
                 },
                 UserInterfaceCommand::Back => {
@@ -1033,6 +1060,16 @@ impl ServoShellWindow {
                 UserInterfaceCommand::NewWebView => {
                     self.set_needs_update();
                     let url = Url::parse("servo:newtab").expect("Should always be able to parse");
+                    self.create_and_activate_toplevel_webview(
+                        state.clone(),
+                        TopLevelWebViewCreationRequest::WithUrl(url),
+                    );
+                },
+                UserInterfaceCommand::NewPrivateTab => {
+                    self.set_needs_update();
+                    let url = Url::parse("servo:newtab").expect("Should always be able to parse");
+                    self.next_private.set(true);
+                    self.next_private_marked.set(true);
                     self.create_and_activate_toplevel_webview(
                         state.clone(),
                         TopLevelWebViewCreationRequest::WithUrl(url),

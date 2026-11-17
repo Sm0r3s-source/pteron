@@ -105,7 +105,14 @@ pub(crate) fn show(
         ui.memory_mut(|memory| memory.data.remove::<usize>(Id::new(DRAG_KEY)));
     }
     let style = Style::of(look);
-    let c = colors(ui, style);
+    let mut c = colors(ui, style);
+    if model.private {
+        c.strip = tinted(c.strip, sidebar::PRIVATE, 0.22);
+        c.bar = tinted(c.bar, sidebar::PRIVATE, 0.14);
+        c.field = tinted(c.field, sidebar::PRIVATE, 0.12);
+        c.line = tinted(c.line, sidebar::PRIVATE, 0.3);
+    }
+    let c = c;
     let row = look.row_height();
     // Opera GX's side bar runs the full height of the window; Opera's starts under the toolbar.
     if style == Style::Gx {
@@ -163,6 +170,14 @@ fn tab(
             painter.rect_filled(shape.translate(vec2(0.0, 1.0)), corners, Color32::from_black_alpha(28));
         }
         painter.rect_filled(shape, corners, c.bar);
+        if style != Style::Gx {
+            // A thin accent line under the tab in use.
+            painter.rect_filled(
+                Rect::from_min_max(pos2(shape.min.x + 12.0, shape.max.y - 2.0), pos2(shape.max.x - 12.0, shape.max.y)),
+                1.0,
+                if marks.is_some_and(|row| row.private) { sidebar::PRIVATE } else { c.accent },
+            );
+        }
         if style == Style::Gx {
             painter.rect_filled(
                 Rect::from_min_max(pos2(shape.min.x, shape.max.y - 2.0), shape.max),
@@ -382,11 +397,15 @@ fn toolbar(
                 let page_buttons = ["bookmark", "reader"].iter().filter(|b| look.shows(b)).count() +
                     usize::from(model.dark_here.is_some() && look.shows("dark"));
                 let right = 34.0 * (page_buttons + 1 + usize::from(downloads) + usize::from(playing)) as f32;
-                let available = (ui.available_width() - right - 12.0).max(120.0);
+                let pill = if model.private { 190.0 } else { 0.0 };
+                let available = (ui.available_width() - right - 12.0 - pill).max(120.0);
                 // Firefox keeps open space on both sides of the address bar on wide windows.
                 let width = if style == Style::Firefox { available.min(available * 0.55 + 300.0) } else { available };
                 let lead = (available - width) / 2.0;
                 ui.add_space(lead + 4.0);
+                if model.private {
+                    sidebar::private_pill(ui);
+                }
                 ui.scope(|ui| {
                     let v = ui.visuals_mut();
                     v.text_edit_bg_color = Some(c.field);
@@ -400,9 +419,10 @@ fn toolbar(
                     v.widgets.inactive.bg_stroke = if style == Style::Gx {
                         Stroke::new(1.0_f32, c.accent.gamma_multiply(0.45))
                     } else {
-                        Stroke::NONE
+                        Stroke::new(1.0_f32, c.line)
                     };
-                    v.selection.stroke = Stroke::new(2.0_f32, c.accent);
+                    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, c.accent.gamma_multiply(0.5));
+                    v.selection.stroke = Stroke::new(1.5_f32, c.accent);
                     sidebar::address_bar(ui, state, model, look, location, location_dirty, width, row + 2.0, actions);
                 });
                 ui.add_space(lead);
@@ -436,6 +456,7 @@ fn main_menu(ui: &mut egui::Ui, model: &Model, look: &Look, actions: &mut Vec<Ac
     ui.spacing_mut().item_spacing.y = 4.0;
     ui.spacing_mut().button_padding = vec2(8.0, 5.0);
     item(ui, "New tab", Action::NewTab, actions);
+    item(ui, "New private tab", Action::NewPrivateTab, actions);
     item(ui, "New window", Action::NewWindow, actions);
     ui.separator();
     ui.menu_button("Bookmarks", |ui| bookmarks_menu(ui, model, actions));

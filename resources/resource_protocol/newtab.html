@@ -14,11 +14,14 @@
       <div class="greeting" id="greeting">Sirocco</div>
       <form action="{{FORM_ACTION}}" autocomplete="off">
         {{HIDDEN_INPUTS}}
-        <input name="{{QUERY_NAME}}" placeholder="Search with {{ENGINE_NAME}} or type an address" autofocus />
+        <div class="box">
+          <svg class="mag" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="q" name="{{QUERY_NAME}}" autofocus autocomplete="off" />
+          <span class="ph" id="ph">Search with {{ENGINE_NAME}} or type an address</span>
+        </div>
         <button type="submit" aria-label="Search">&rarr;</button>
       </form>
       <div class="shortcuts">{{SHORTCUTS}}</div>
-      <div class="hint">Sirocco</div>
     </main>
     <script>
       (function () {
@@ -34,6 +37,10 @@
             part + " · " + days[d.getDay()] + ", " + months[d.getMonth()] + " " + d.getDate();
         }
         try { tick(); setInterval(tick, 20000); } catch (e) {}
+        // The hint is its own element and the input has no placeholder: the engine paints a placeholder as selected text, in place of the caret.
+        var q = document.getElementById("q"), ph = document.getElementById("ph");
+        function sync() { ph.style.display = q.value ? "none" : ""; }
+        q.addEventListener("input", sync); sync();
       })();
     </script>
   </body>

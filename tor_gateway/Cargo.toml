@@ -1,0 +1,22 @@
+# Sirocco's Tor gateway: a small separate program that private tabs connect through. Sirocco starts it
+# when the first private tab opens and stops it when the last one closes. (It is its own program, with
+# its own dependency set, so Tor's libraries never touch the browser engine's build.)
+[package]
+name = "sirocco-tor"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+arti-client = { version = "0.48.0", default-features = false, features = ["tokio", "rustls", "compression", "static-sqlite"] }
+tor-rtcompat = { version = "0.48.0", default-features = false, features = ["tokio", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+strip = true

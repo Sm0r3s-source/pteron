@@ -38,6 +38,13 @@ mod danger;
 mod filters;
 #[path = "../../ports/servoshell/privacy.rs"]
 mod privacy;
+/// Stand-in for the Tor process manager (it needs the engine's net crate).
+mod tor {
+    #[derive(Clone, PartialEq)]
+    pub(crate) enum Status { Off, Starting, Ready, Failed(String) }
+    pub(crate) fn status() -> Status { Status::Off }
+    pub(crate) fn badge_suffix() -> &'static str { "" }
+}
 #[path = "../../ports/servoshell/locks.rs"]
 mod locks;
 #[path = "../../ports/servoshell/util.rs"]

@@ -54,6 +54,8 @@ pub(crate) struct TabRow {
     pub audible: bool,
     /// Muted by the user.
     pub muted: bool,
+    /// A private (incognito) tab.
+    pub private: bool,
 }
 
 /// One bookmark, as shown in the list.
@@ -101,6 +103,25 @@ pub(crate) struct Model {
     pub dark_here: Option<bool>,
     /// Sirocco draws the window's own top: minimize, maximize and close buttons are needed.
     pub own_titlebar: bool,
+    /// The active tab is a private one.
+    pub private: bool,
+}
+
+/// The purple that marks private tabs.
+pub(crate) const PRIVATE: Color32 = Color32::from_rgb(160, 115, 235);
+
+/// The "Private" badge shown next to the address bar of a private tab.
+pub(crate) fn private_pill(ui: &mut egui::Ui) {
+    Frame::NONE
+        .fill(PRIVATE.gamma_multiply(0.22))
+        .corner_radius(11)
+        .inner_margin(egui::Margin::symmetric(9, 3))
+        .show(ui, |ui| {
+            ui.label(RichText::new(format!("Private{}", crate::tor::badge_suffix())).size(12.0).strong().color(PRIVATE));
+            if crate::tor::status() == crate::tor::Status::Starting {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(600));
+            }
+        });
 }
 
 /// What the user did in the sidebar this frame.
@@ -110,6 +131,7 @@ pub(crate) enum Action {
     Reload,
     Go(String),
     NewTab,
+    NewPrivateTab,
     NewWindow,
     Activate(usize),
     Close(usize),
@@ -469,6 +491,36 @@ pub(crate) fn icon_button(text: &str) -> Button<'_> {
     Button::new(text).frame(false).min_size(vec2(26.0, 26.0))
 }
 
+/// A 26x26 button whose icon is drawn with the painter, so every icon in the row has the same weight.
+fn painted_button(ui: &mut egui::Ui, draw: impl FnOnce(&egui::Painter, Pos2, egui::Color32)) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 8.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    draw(ui.painter(), rect.center(), ui.visuals().text_color());
+    response
+}
+
+/// A clock: a circle with two hands.
+pub(crate) fn clock_button(ui: &mut egui::Ui) -> egui::Response {
+    painted_button(ui, |painter, c, color| {
+        let stroke = Stroke::new(1.4_f32, color);
+        painter.circle_stroke(c, 8.0, stroke);
+        painter.line_segment([c, c + vec2(0.0, -5.0)], stroke);
+        painter.line_segment([c, c + vec2(3.6, 2.0)], stroke);
+    })
+}
+
+/// A window with a plus: open a new window.
+pub(crate) fn window_button(ui: &mut egui::Ui) -> egui::Response {
+    painted_button(ui, |painter, c, color| {
+        let stroke = Stroke::new(1.4_f32, color);
+        painter.rect_stroke(egui::Rect::from_center_size(c, vec2(16.0, 14.0)), 3.0, stroke, egui::StrokeKind::Inside);
+        painter.line_segment([c + vec2(-3.5, 0.0), c + vec2(3.5, 0.0)], stroke);
+        painter.line_segment([c + vec2(0.0, -3.5), c + vec2(0.0, 3.5)], stroke);
+    })
+}
+
 /// A cog with triangular teeth, drawn with the painter (no font glyph needed).
 pub(crate) fn cog_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
@@ -542,6 +594,25 @@ pub(crate) fn show(
         return actions;
     }
     if !state.visible {
+        // Sirocco draws the window's own top: with the sidebar tucked away, minimize, maximize and
+        // close stay reachable in the top corner (faint until the mouse is on them).
+        if model.own_titlebar {
+            let ctx = ui.ctx().clone();
+            let size = vec2(34.0, 26.0);
+            let screen = ctx.content_rect();
+            let strip = Rect::from_min_size(pos2(screen.max.x - size.x * 3.0, screen.min.y), vec2(size.x * 3.0, size.y));
+            egui::Area::new(Id::new("pteron_corner_buttons"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(strip.min)
+                .show(&ctx, |ui| {
+                    ui.set_min_size(strip.size());
+                    let hovered = ui.rect_contains_pointer(strip);
+                    ui.set_opacity(if hovered { 1.0 } else { 0.5 });
+                    let fill = ui.visuals().window_fill();
+                    ui.painter().rect_filled(strip, 0.0, fill.gamma_multiply(if hovered { 0.95 } else { 0.75 }));
+                    window_buttons(ui, strip.right_top(), size, &mut actions);
+                });
+        }
         return actions;
     }
     let ctx = ui.ctx().clone();
@@ -593,6 +664,10 @@ fn framed(
                     });
                     ui.add_space(4.0);
 
+                    if model.private {
+                        private_pill(ui);
+                        ui.add_space(4.0);
+                    }
                     // Address bar: a lock (or warning) at the left, a copy-link button at the right.
                     address_bar(ui, state, model, look, location, location_dirty, inner_width, 28.0, actions);
                     if model.security == Security::NotSecure {
@@ -609,6 +684,12 @@ fn framed(
                         .clicked()
                     {
                         actions.push(Action::NewTab);
+                    }
+                    if ui
+                        .add_sized([inner_width, row_height()], Button::new("+  New private tab"))
+                        .clicked()
+                    {
+                        actions.push(Action::NewPrivateTab);
                     }
                     // Sirocco: what Plume Music is playing, with simple controls.
                     music_card(ui, inner_width);
@@ -684,15 +765,13 @@ fn framed(
                             *location_dirty = false;
                             actions.push(Action::SetExperimental(experimental));
                         }
-                        if look.shows("newwindow") && ui
-                            .add_sized([26.0, 26.0], Button::new(RichText::new("⊞").size(16.0)).frame(false))
+                        if look.shows("newwindow") && window_button(ui)
                             .on_hover_text("New window")
                             .clicked()
                         {
                             actions.push(Action::NewWindow);
                         }
-                        if ui
-                            .add_sized([26.0, 26.0], Button::new(RichText::new("🕘").size(15.0)).frame(false))
+                        if clock_button(ui)
                             .on_hover_text("History (Ctrl+H)")
                             .clicked()
                         {
@@ -726,10 +805,10 @@ pub(crate) fn address_bar(
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let copy = look.shows("copy");
-            let mut width = inner_width - if copy { 32.0 } else { 4.0 };
+            let mut width = inner_width - 4.0;
             match model.security {
                 Security::Secure => {
-                    ui.label(RichText::new("\u{1F512}").size(13.0).color(Color32::from_rgb(70, 160, 90)))
+                    ui.label(RichText::new("\u{1F512}").size(12.0).color(ui.visuals().weak_text_color()))
                         .on_hover_text("Secure connection (https)");
                     width -= 22.0;
                 },
@@ -745,6 +824,7 @@ pub(crate) fn address_bar(
                 TextEdit::singleline(location)
                     .id(location_id)
                     .vertical_align(egui::Align::Center)
+                    .margin(egui::Margin { left: 12, right: if copy { 32 } else { 12 }, top: 0, bottom: 0 })
                     .hint_text("Search or enter address"),
             );
             let copied_id = Id::new("pteron_link_copied");
@@ -752,8 +832,9 @@ pub(crate) fn address_bar(
             let copied_at: Option<f64> = ui.memory(|m| m.data.get_temp(copied_id));
             let recently = copied_at.is_some_and(|t| now - t < 1.3);
             let label = if recently { "\u{2713}" } else { "\u{1F5D0}" };
+            let copy_rect = Rect::from_center_size(pos2(field.rect.right() - 16.0, field.rect.center().y), vec2(24.0, height));
             if copy && ui
-                .add_sized([24.0, height], Button::new(RichText::new(label).size(14.0)).frame(false))
+                .put(copy_rect, Button::new(RichText::new(label).size(13.0).color(ui.visuals().weak_text_color())).frame(false))
                 .on_hover_text("Copy link")
                 .clicked()
             {
@@ -1188,6 +1269,10 @@ fn tab_row(ui: &mut egui::Ui, index: usize, tab: &TabRow, model: &Model, actions
 pub(crate) fn tab_marks(painter: &egui::Painter, right: Pos2, tab: &TabRow, color: Color32) -> f32 {
     let stroke = Stroke::new(1.2_f32, color.gamma_multiply(0.75));
     let mut used = 0.0;
+    if tab.private {
+        painter.circle_filled(right - vec2(used + 7.0, 0.0), 4.0, PRIVATE);
+        used += 16.0;
+    }
     if tab.audible || tab.muted {
         speaker_glyph(painter, audio_rect(right).center(), tab.muted, color);
         used += 18.0;

@@ -214,6 +214,7 @@ impl WebView {
             webview_id: webview.id(),
             viewport_details,
             user_content_manager_id,
+            is_private: builder.private,
         };
 
         // There are two possibilities here. Either the WebView is a new toplevel
@@ -1115,6 +1116,7 @@ pub struct WebViewBuilder {
     hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     create_new_webview_responder: Option<AutomaticResponder<Option<NewWebViewDetails>>>,
     user_content_manager: Option<Rc<UserContentManager>>,
+    private: bool,
     clipboard_delegate: Option<Rc<dyn ClipboardDelegate>>,
     #[cfg(feature = "gamepad")]
     gamepad_delegate: Option<Rc<dyn GamepadDelegate>>,
@@ -1135,6 +1137,7 @@ impl WebViewBuilder {
             delegate: Rc::new(DefaultWebViewDelegate),
             create_new_webview_responder: None,
             user_content_manager: None,
+            private: false,
             clipboard_delegate: None,
             #[cfg(feature = "gamepad")]
             gamepad_delegate: None,
@@ -1162,6 +1165,12 @@ impl WebViewBuilder {
     /// Set the initial URL to load in the [`WebView`] being created.
     pub fn url(mut self, url: Url) -> Self {
         self.url = Some(url);
+        self
+    }
+
+    /// Sirocco: make the [`WebView`] being created a private one.
+    pub fn private(mut self, private: bool) -> Self {
+        self.private = private;
         self
     }
 

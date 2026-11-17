@@ -46,6 +46,7 @@ mod danger;
 mod filters;
 mod memsaver;
 mod privacy;
+mod tor;
 mod multisearch;
 mod secure;
 mod sitecheck;

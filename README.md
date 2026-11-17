@@ -7,7 +7,7 @@ manager, an ad blocker, and a Memory saver mode for older computers.
 Sirocco is an early test version. Servo does not support every web feature yet, so some sites look
 wrong or do not work (see [Known problems](#known-problems)). Read [Before you install](#before-you-install) first.
 
-Sirocco was called Pteron until update 70. Your settings, bookmarks, history and passwords are moved over on the first start, and Pteron 69 updates to Sirocco from inside the app. (The screenshots below still show the old name and icon.)
+Sirocco was called Pteron until update 70. Update 71 restyled the whole browser (warm, minimal, one orange accent) added a Searches tab to History, and added private tabs (Ctrl+Shift+N): no history, no saved session, nothing kept, and all their traffic goes through Tor (built in, started only while a private tab is open). Your settings, bookmarks, history and passwords are moved over on the first start, and Pteron 69 updates to Sirocco from inside the app. (The screenshots below still show the old name and icon.)
 
 ![Sirocco with its sidebar and the new tab page](screenshots/sidebar.png)
 

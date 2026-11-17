@@ -329,50 +329,60 @@ pub(crate) async fn start_websocket(
         .port_or_known_default()
         .ok_or_else(|| Error::Url(UrlError::UnableToConnect("Unknown port".into())))?;
 
-    // Sirocco: the same DNS rebinding guard as for other connections, and an internet page may
-    // not open a WebSocket into your computer or home network (for example a program's local
-    // control port such as ws://127.0.0.1:9222).
-    let name = domain.to_string();
-    let looked_up: Vec<std::net::SocketAddr> = tokio::net::lookup_host((&*name, port))
-        .await
-        .map_err(Error::Io)?
-        .collect();
-    let addresses = crate::connector::guard_addresses(
-        name.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase().as_str(),
-        looked_up,
-    )
-    .map_err(Error::Io)?;
-    let page_is_public = match &client.origin {
-        net_traits::request::Origin::Origin(origin) => match origin.host() {
-            Some(url::Host::Ipv4(ip)) => !crate::connector::is_private_ip((*ip).into()),
-            Some(url::Host::Ipv6(ip)) => !crate::connector::is_private_ip((*ip).into()),
-            Some(url::Host::Domain(name)) => {
-                let name = name.to_ascii_lowercase();
-                name != "localhost" &&
-                    ![".localhost", ".local", ".internal", ".home.arpa"]
-                        .iter()
-                        .any(|end| name.ends_with(end))
+    // Sirocco: a private tab's WebSocket goes through the private gateway, by name (no local
+    // DNS lookup).
+    let socket = if http_state.private {
+        let bare = domain.to_string();
+        crate::connector::private_connect(bare.trim_start_matches('[').trim_end_matches(']'), port)
+            .await
+            .map_err(Error::Io)?
+    } else {
+        // Sirocco: the same DNS rebinding guard as for other connections, and an internet page may
+        // not open a WebSocket into your computer or home network (for example a program's local
+        // control port such as ws://127.0.0.1:9222).
+        let name = domain.to_string();
+        let looked_up: Vec<std::net::SocketAddr> = tokio::net::lookup_host((&*name, port))
+            .await
+            .map_err(Error::Io)?
+            .collect();
+        let addresses = crate::connector::guard_addresses(
+            name.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase().as_str(),
+            looked_up,
+        )
+        .map_err(Error::Io)?;
+        let page_is_public = match &client.origin {
+            net_traits::request::Origin::Origin(origin) => match origin.host() {
+                Some(url::Host::Ipv4(ip)) => !crate::connector::is_private_ip((*ip).into()),
+                Some(url::Host::Ipv6(ip)) => !crate::connector::is_private_ip((*ip).into()),
+                Some(url::Host::Domain(name)) => {
+                    let name = name.to_ascii_lowercase();
+                    name != "localhost" &&
+                        ![".localhost", ".local", ".internal", ".home.arpa"]
+                            .iter()
+                            .any(|end| name.ends_with(end))
+                },
+                None => false,
             },
-            None => false,
-        },
-        _ => false,
+            _ => false,
+        };
+        // (A site's own WebSocket, to the same host name, is fine: a home server reached by name.)
+        let same_host = match &client.origin {
+            net_traits::request::Origin::Origin(origin) => origin
+                .host()
+                .is_some_and(|host| host.to_string().eq_ignore_ascii_case(&name)),
+            _ => false,
+        };
+        if page_is_public && !same_host && addresses.iter().any(|a| crate::connector::is_private_ip(a.ip())) {
+            warn!("Blocked a WebSocket from an internet page into the local network: {name}");
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "blocked: an internet page may not connect into the local network",
+            )));
+        }
+        let try_socket = TcpStream::connect(&*addresses).await;
+        let socket = try_socket.map_err(Error::Io)?;
+    socket
     };
-    // (A site's own WebSocket, to the same host name, is fine: a home server reached by name.)
-    let same_host = match &client.origin {
-        net_traits::request::Origin::Origin(origin) => origin
-            .host()
-            .is_some_and(|host| host.to_string().eq_ignore_ascii_case(&name)),
-        _ => false,
-    };
-    if page_is_public && !same_host && addresses.iter().any(|a| crate::connector::is_private_ip(a.ip())) {
-        warn!("Blocked a WebSocket from an internet page into the local network: {name}");
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "blocked: an internet page may not connect into the local network",
-        )));
-    }
-    let try_socket = TcpStream::connect(&*addresses).await;
-    let socket = try_socket.map_err(Error::Io)?;
     let connector = TlsConnector::from(Arc::new(tls_config));
 
     // TODO(pylbrecht): move request conversion to a separate function

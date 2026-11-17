@@ -548,6 +548,20 @@ impl HeadedWindow {
             !modifiers.alt_key()
     }
 
+    /// Sirocco: is this key press Ctrl+Shift+N (new private tab)?
+    fn is_private_tab_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
+        if event.state != ElementState::Pressed {
+            return false;
+        }
+        let LogicalKey::Character(text) = &event.logical_key else {
+            return false;
+        };
+        text.to_lowercase() == "n" &&
+            (modifiers.control_key() || modifiers.super_key()) &&
+            modifiers.shift_key() &&
+            !modifiers.alt_key()
+    }
+
     /// Sirocco: is this key press Ctrl+H (browsing history)?
     fn is_history_shortcut(event: &KeyEvent, modifiers: ModifiersState) -> bool {
         if event.state != ElementState::Pressed {
@@ -712,6 +726,15 @@ impl HeadedWindow {
             } if Self::is_reopen_tab_shortcut(key_event, self.modifiers_state.get()) => {
                 // Sirocco: Ctrl+Shift+T brings back the tab closed last.
                 window.queue_user_interface_command(UserInterfaceCommand::ReopenClosedTab);
+                self.winit_window.request_redraw();
+                consumed = true;
+            },
+            WindowEvent::KeyboardInput {
+                event: ref key_event,
+                ..
+            } if Self::is_private_tab_shortcut(key_event, self.modifiers_state.get()) => {
+                // Sirocco: Ctrl+Shift+N opens a private tab.
+                window.queue_user_interface_command(UserInterfaceCommand::NewPrivateTab);
                 self.winit_window.request_redraw();
                 consumed = true;
             },

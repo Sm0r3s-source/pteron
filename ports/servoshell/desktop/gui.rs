@@ -559,7 +559,7 @@ impl Gui {
         let active = window.active_webview().map(|webview| webview.id()) == Some(webview.id());
 
         // Setup a tab frame that will contain the favicon, title and close button
-        let mut tab_frame = egui::Frame::NONE.corner_radius(4).begin(ui);
+        let mut tab_frame = egui::Frame::NONE.corner_radius(8).begin(ui);
         {
             tab_frame.content_ui.add_space(5.0);
 
@@ -770,10 +770,12 @@ impl Gui {
                         .webviews()
                         .into_iter()
                         .map(|(id, webview)| sidebar::TabRow {
-                            label: match (webview.page_title(), webview.url()) {
-                                (Some(title), _) if !title.is_empty() => title,
-                                (_, Some(url)) => url.to_string(),
-                                _ => "New Tab".into(),
+                            label: {
+                                match (webview.page_title(), webview.url()) {
+                                    (Some(title), _) if !title.is_empty() => title,
+                                    (_, Some(url)) => url.to_string(),
+                                    _ => "New Tab".into(),
+                                }
                             },
                             active: window.active_webview().map(|active| active.id()) == Some(id),
                             pinned: window.is_pinned(id),
@@ -785,6 +787,7 @@ impl Gui {
                             split: window.split().is_some_and(|(left, right)| left == id || right == id),
                             audible: window.is_audible(id),
                             muted: window.is_muted(id),
+                            private: window.is_private(id),
                         })
                         .collect(),
                     sleeping: window
@@ -838,6 +841,7 @@ impl Gui {
                         Url::parse(url).ok()?.host_str().map(|host| look.dark_for(host))
                     }),
                     own_titlebar: own,
+                    private: window.active_webview().is_some_and(|w| window.is_private(w.id())),
                 };
                 let height = ctx.available_rect_before_wrap().height();
                 let actions = if look.top_tabs() {
@@ -869,6 +873,9 @@ impl Gui {
                         },
                         sidebar::Action::NewTab => {
                             window.queue_user_interface_command(UserInterfaceCommand::NewWebView)
+                        },
+                        sidebar::Action::NewPrivateTab => {
+                            window.queue_user_interface_command(UserInterfaceCommand::NewPrivateTab)
                         },
                         sidebar::Action::NewWindow => {
                             let url = Url::parse("servo:newtab")
@@ -2237,21 +2244,21 @@ fn visuals_for(p: &crate::appearance::Palette) -> egui::Visuals {
     let inactive = &mut v.widgets.inactive;
     inactive.bg_fill = surface;
     inactive.weak_bg_fill = surface;
-    inactive.bg_stroke = egui::Stroke::new(1.0_f32, line);
+    inactive.bg_stroke = egui::Stroke::NONE;
     inactive.fg_stroke = egui::Stroke::new(1.0_f32, text);
     let hovered = &mut v.widgets.hovered;
-    hovered.bg_fill = mixed(p.surface, p.accent, 0.20);
-    hovered.weak_bg_fill = mixed(p.surface, p.accent, 0.20);
+    hovered.bg_fill = mixed(p.surface, p.accent, 0.10);
+    hovered.weak_bg_fill = mixed(p.surface, p.accent, 0.10);
     hovered.bg_stroke = egui::Stroke::new(1.0_f32, accent.gamma_multiply(0.7));
     hovered.fg_stroke = egui::Stroke::new(1.5_f32, text);
     let active = &mut v.widgets.active;
-    active.bg_fill = mixed(p.surface, p.accent, 0.34);
-    active.weak_bg_fill = mixed(p.surface, p.accent, 0.34);
+    active.bg_fill = mixed(p.surface, p.accent, 0.18);
+    active.weak_bg_fill = mixed(p.surface, p.accent, 0.18);
     active.bg_stroke = egui::Stroke::new(1.0_f32, accent);
     active.fg_stroke = egui::Stroke::new(2.0_f32, text);
     let open = &mut v.widgets.open;
-    open.bg_fill = mixed(p.surface, p.accent, 0.26);
-    open.weak_bg_fill = mixed(p.surface, p.accent, 0.26);
+    open.bg_fill = mixed(p.surface, p.accent, 0.14);
+    open.weak_bg_fill = mixed(p.surface, p.accent, 0.14);
     open.bg_stroke = egui::Stroke::new(1.0_f32, line);
     open.fg_stroke = egui::Stroke::new(1.0_f32, text);
     v
@@ -2276,7 +2283,10 @@ fn apply_theme(ctx: &egui::Context, settings: &pteron::Settings) {
         crate::appearance::polish_style(ctx, &settings.look);
         return;
     }
-    // Plain looks keep their own colours; the chosen accent tints selections and links.
+    // The plain looks wear Sirocco's own colours (light, dark, or whichever the system uses).
+    ctx.set_visuals_of(egui::Theme::Light, visuals_for(&crate::appearance::SIROCCO_LIGHT));
+    ctx.set_visuals_of(egui::Theme::Dark, visuals_for(&crate::appearance::SIROCCO_DARK));
+    // The chosen accent tints selections and links.
     let [r, g, b] = crate::appearance::accent_rgb(settings);
     let accent = egui::Color32::from_rgb(r, g, b);
     ctx.all_styles_mut(|style| {

@@ -217,6 +217,8 @@ pub(crate) enum UserInterfaceCommand {
     /// Sirocco: reload the tabs that show the new tab page (after a look or search setting changed).
     ReloadNewTabs,
     NewWebView,
+    /// Sirocco: open a private (incognito) tab.
+    NewPrivateTab,
     /// Sirocco: reopen the tab that was closed last.
     ReopenClosedTab,
     CloseWebView(WebViewId),
@@ -909,9 +911,12 @@ impl WebViewDelegate for RunningAppState {
             crate::downloads::set_notice("Blocked: the page tried to open an address that is not a web page.".to_string());
             return;
         }
+        // Sirocco: a private tab uses none of the helpers that connect to the internet outside the
+        // private connection (the Plume and Music helpers, the compatibility tab, downloads).
+        let private = self.window_for_webview(&webview).is_private(webview.id());
         // Sirocco: YouTube videos open in a simple local player page (YouTube's own player
         // needs Media Source Extensions, which Servo does not have yet).
-        if crate::pteron::settings().youtube_player &&
+        if !private && crate::pteron::settings().youtube_player &&
             let Some(action) = crate::youtube::classify(&navigation_request.url)
         {
             navigation_request.deny();
@@ -927,7 +932,9 @@ impl WebViewDelegate for RunningAppState {
             return;
         }
         // Sirocco: sites that need the compatibility tab open there from the start.
-        if let Some(page) = crate::compat_view::redirect(&crate::pteron::settings(), &navigation_request.url) {
+        if !private &&
+            let Some(page) = crate::compat_view::redirect(&crate::pteron::settings(), &navigation_request.url)
+        {
             navigation_request.deny();
             webview.load(page);
             return;
@@ -955,6 +962,10 @@ impl WebViewDelegate for RunningAppState {
         if crate::downloads::is_download_url(&navigation_request.url) {
             let url = navigation_request.url.clone();
             navigation_request.deny();
+            if private {
+                crate::downloads::set_notice("Downloads are off in private tabs (they would not go through Tor).".to_string());
+                return;
+            }
             if crate::pteron::gesture_within(2000) {
                 if crate::downloads::page_may_download() {
                     crate::downloads::begin(&url);
@@ -1036,7 +1047,9 @@ impl WebViewDelegate for RunningAppState {
             let Some(url) = webview.url()
         {
             // Sirocco: the history page remembers the visit.
-            crate::library::record_visit(url.as_str(), &webview.page_title().unwrap_or_default());
+            if !window.is_private(webview.id()) {
+                crate::library::record_visit(url.as_str(), &webview.page_title().unwrap_or_default());
+            }
         }
         let webdriver_status = match status {
             LoadStatus::Complete => WebDriverLoadStatus::Complete,
@@ -1070,6 +1083,11 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn request_permission(&self, webview: WebView, permission_request: PermissionRequest) {
+        // Sirocco: a private tab never shares your location, camera or microphone.
+        if self.window_for_webview(&webview).is_private(webview.id()) {
+            permission_request.deny();
+            return;
+        }
         // Sirocco: the dialog names the site that asks.
         let site = crate::window::site_of(&webview);
         self.platform_window_for_webview(&webview)
@@ -1174,7 +1192,9 @@ impl WebViewDelegate for RunningAppState {
     fn show_console_message(&self, webview: WebView, level: ConsoleLogLevel, message: String) {
         // Sirocco: login-form messages from our own page script; never logged (they can hold
         // a password).
-        if crate::passwords::handle_console(webview.url().as_ref(), &message) {
+        // (A private tab tells it nothing: no password is offered or saved there.)
+        let private = self.window_for_webview(&webview).is_private(webview.id());
+        if crate::passwords::handle_console(webview.url().as_ref().filter(|_| !private), &message) {
             return;
         }
         // Sirocco: the "Check this page" report.

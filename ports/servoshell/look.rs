@@ -93,7 +93,7 @@ impl Default for Look {
             scale: 100,
             density: "normal".into(),
             roundness: 8,
-            hidden_buttons: vec!["home".into()],
+            hidden_buttons: vec!["home".into(), "experimental".into()],
             tab_icons: true,
             close_always: false,
             bookmarks_bar: true,

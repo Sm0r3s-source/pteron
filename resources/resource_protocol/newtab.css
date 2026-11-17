@@ -3,26 +3,26 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 :root {
-  --bg: #1b1c1e;
-  --bg-glow: rgba(214, 170, 72, 0.16);
-  --text: #e9e6df;
-  --muted: #8d8b86;
-  --field: #26272a;
-  --field-border: #36373b;
-  --gold: #d6aa48;
-  --gold-soft: rgba(214, 170, 72, 0.35);
+  --bg: #14161a;
+  --bg-glow: rgba(240, 122, 77, 0.13);
+  --text: #ecebe8;
+  --muted: #8f96a3;
+  --field: #1b1e24;
+  --field-border: #262a33;
+  --gold: #f07a4d;
+  --gold-soft: rgba(240, 122, 77, 0.30);
 }
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f4f2ee;
-    --bg-glow: rgba(190, 140, 40, 0.14);
-    --text: #2a2926;
-    --muted: #8a867e;
+    --bg: #faf8f5;
+    --bg-glow: rgba(224, 96, 58, 0.10);
+    --text: #1f1b18;
+    --muted: #8a8079;
     --field: #ffffff;
-    --field-border: #dedad2;
-    --gold: #b88a22;
-    --gold-soft: rgba(184, 138, 34, 0.35);
+    --field-border: #ece6df;
+    --gold: #e0603a;
+    --gold-soft: rgba(224, 96, 58, 0.26);
   }
 }
 
@@ -52,10 +52,8 @@ main {
 }
 
 .logo {
-  width: 84px;
-  height: 84px;
-  border-radius: 20px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28);
+  width: 96px;
+  height: 96px;
   margin-bottom: 26px;
 }
 
@@ -98,11 +96,31 @@ input {
   outline: none;
   color: var(--text);
   font-size: 16px;
-  padding: 15px 8px 15px 24px;
+  padding: 15px 8px 15px 54px;
 }
 
-input::placeholder {
+.box { position: relative; flex: 1; display: flex; min-width: 0; }
+
+.mag {
+  position: absolute;
+  left: 22px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--muted);
+  pointer-events: none;
+}
+
+.ph {
+  position: absolute;
+  left: 54px;
+  top: 50%;
+  transform: translateY(-50%);
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 16px;
+  color: var(--muted);
+  pointer-events: none;
 }
 
 button {
@@ -235,3 +253,12 @@ button {
 .add[open] {
   width: 210px;
 }
+
+
+
+/* Nothing on this page is meant to be selected (a stray select-all turned it all blue). */
+body { -webkit-user-select: none; user-select: none; }
+body *:not(input)::selection { background: transparent; color: inherit; }
+input { -webkit-user-select: text; user-select: text; }
+input { caret-color: #e0603a; }
+img { -webkit-user-drag: none; pointer-events: none; }

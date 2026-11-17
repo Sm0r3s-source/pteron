@@ -127,6 +127,8 @@ pub struct HttpState {
     pub cors_cache: RwLock<CorsCache>,
     pub history_states: RwLock<FxHashMap<HistoryStateId, Vec<u8>>>,
     pub client: ServoClient,
+    /// Sirocco: a private tab's state. Its connections go only through the private gateway (Tor).
+    pub private: bool,
     pub override_manager: CertificateErrorOverrideManager,
     pub embedder_proxy: GenericEmbedderProxy<NetToEmbedderMsg>,
 }

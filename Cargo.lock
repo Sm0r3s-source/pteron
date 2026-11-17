@@ -10583,6 +10583,7 @@ dependencies = [
  "servo",
  "servo-allocator",
  "servo-base",
+ "servo-net",
  "servo-webdriver-server",
  "signal-hook-registry",
  "surfman",

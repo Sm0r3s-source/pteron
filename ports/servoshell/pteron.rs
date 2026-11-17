@@ -173,7 +173,7 @@ impl Default for Settings {
             clear_on_exit: false,
             adblock: true,
             accent: "auto".to_string(),
-            accent_custom: "#d6aa48".to_string(),
+            accent_custom: "#e0603a".to_string(),
             newtab_bg: "theme".to_string(),
             newtab_color: "#1b1c1e".to_string(),
             compat: Vec::new(),
@@ -862,11 +862,15 @@ pub(crate) fn take_first_run() -> bool {
 
 pub(crate) const PAGE_STYLE_PUBLIC: &str = PAGE_STYLE;
 const PAGE_STYLE: &str = "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<style>:root{color-scheme:dark light}body{font:16px/1.55 system-ui,Segoe UI,sans-serif;max-width:680px;margin:48px auto;padding:0 20px;background:#16181d;color:#e6e8ec}\
-h1{font-size:28px;margin:0 0 4px}h2{font-size:18px;margin:28px 0 8px}p{margin:8px 0}.sub{opacity:.7;margin-bottom:24px}\
-.card{background:#1f2229;border:1px solid #2c303a;border-radius:10px;padding:4px 18px 12px;margin:14px 0}\
-li{margin:6px 0}code{background:#2a2e38;padding:1px 6px;border-radius:5px}a{color:#6ea8ff}.btn{display:inline-block;background:#6ea8ff;color:#10131a;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600}\
-@media (prefers-color-scheme:light){body{background:#fafafa;color:#1c1e22}.card{background:#fff;border-color:#dcdfe4}code{background:#eceef2}a{color:#1d5fd1}}</style>";
+<style>:root{color-scheme:dark light;--bg:#14161a;--fg:#ecebe8;--mut:#8f96a3;--card:#1b1e24;--bd:#262a33;--acc:#f07a4d;--soft:rgba(255,255,255,.06)}\
+*{box-sizing:border-box}body{font:15px/1.6 system-ui,Segoe UI,sans-serif;max-width:720px;margin:56px auto;padding:0 24px;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased}\
+h1{font-size:26px;font-weight:600;margin:0 0 4px}h2{font-size:12px;letter-spacing:.7px;text-transform:uppercase;color:var(--mut);font-weight:600;margin:30px 0 8px}p{margin:8px 0}.sub{color:var(--mut)}\
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:6px 18px 12px;margin:10px 0}\
+li{margin:6px 0}code{background:var(--soft);padding:1px 6px;border-radius:6px}a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}\
+.btn{display:inline-block;background:var(--acc);color:#fff;padding:9px 18px;border-radius:999px;text-decoration:none;font-weight:600;border:0;font:inherit;font-weight:600;cursor:pointer}.btn:hover{text-decoration:none;filter:brightness(1.07)}\
+input{font:inherit;color:var(--fg);background:var(--soft);border:1px solid transparent;border-radius:999px;padding:9px 18px}input:focus{outline:0;background:var(--card);border-color:var(--bd);box-shadow:0 0 0 4px rgba(240,122,77,.18)}\
+.tabs{display:inline-flex;gap:2px;padding:3px;border-radius:999px;background:var(--soft);margin:14px 0 4px}.tabs a{padding:6px 18px;border-radius:999px;color:var(--mut);font-weight:600;font-size:14px}.tabs a:hover{text-decoration:none;color:var(--fg)}.tabs a.on{background:var(--card);color:var(--fg);box-shadow:0 1px 4px rgba(0,0,0,.18)}\
+@media (prefers-color-scheme:light){:root{--bg:#faf8f5;--fg:#1f1b18;--mut:#8a8079;--card:#fff;--bd:#ece6df;--acc:#e0603a;--soft:rgba(60,40,30,.06)}}</style>";
 
 /// The page shown the first time Sirocco opens.
 pub(crate) fn welcome_html() -> String {

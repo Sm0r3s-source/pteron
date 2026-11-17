@@ -684,119 +684,127 @@ pub(crate) fn esc(text: &str) -> String {
 }
 
 const STYLE: &str = r#"
-:root{color-scheme:light dark;--bg:#f6f4ef;--fg:#1c1b19;--mut:#6b675f;--card:#fff;--bd:#e2ddd2;--gold:#b8892a}
-@media (prefers-color-scheme:dark){:root{--bg:#161513;--fg:#ece8df;--mut:#a19b8f;--card:#201f1c;--bd:#34322d;--gold:#d6aa48}}
-html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 "Segoe UI",system-ui,sans-serif}
-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;padding:9px 22px;background:var(--bg);border-bottom:1px solid var(--bd)}
-.brand{display:flex;align-items:center;gap:8px;color:var(--fg);text-decoration:none;font-weight:600;font-size:19px;letter-spacing:.3px}
-.brand svg{width:24px;height:24px}
-.search{flex:1;max-width:580px;margin:0 auto;display:flex;gap:8px}
-.search input{flex:1;min-width:0;font:inherit;padding:8px 16px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--fg);caret-color:var(--gold)}
-.search button{font:inherit;padding:8px 18px;border-radius:999px;border:0;background:var(--gold);color:#1b1608;font-weight:600;cursor:pointer}
-.search{position:relative}
-.sug{display:none;position:absolute;top:100%;left:0;right:0;margin-top:6px;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:6px 0;box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:20;overflow:hidden}
-.sug div{padding:7px 18px;cursor:pointer;font-size:15px}
-.sug div.on,.sug div:hover{background:rgba(214,170,72,.16)}
-main{max-width:1320px;margin:0 auto;padding:18px 22px 40px}
-h1{font-size:20px;margin:12px 0 6px;line-height:1.3}
-h2{font-size:15px;margin:0 0 12px;color:var(--mut);font-weight:600}
+:root{color-scheme:light dark;--bg:#faf8f5;--fg:#1f1b18;--mut:#8a8079;--card:#fff;--bd:#ece6df;--gold:#e0603a;--soft:rgba(60,40,30,.06);--glow:rgba(224,96,58,.16);--sh:0 10px 30px rgba(40,24,16,.12)}
+@media (prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#ecebe8;--mut:#8f96a3;--card:#1b1e24;--bd:#262a33;--gold:#f07a4d;--soft:rgba(255,255,255,.06);--glow:rgba(240,122,77,.2);--sh:0 10px 30px rgba(0,0,0,.45)}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:20px;padding:10px 24px;background:var(--bg)}
+.brand{display:flex;align-items:center;gap:9px;color:var(--fg);text-decoration:none;font-weight:600;font-size:17px;letter-spacing:.2px}
+.brand svg{width:22px;height:22px}
+header>a:last-child{color:var(--mut);text-decoration:none;font-size:14px;padding:6px 12px;border-radius:999px}
+header>a:last-child:hover{color:var(--fg);background:var(--soft)}
+.search{position:relative;flex:1;max-width:560px;margin:0 auto;display:flex}
+.search input{flex:1;min-width:0;font:inherit;padding:9px 52px 9px 18px;border-radius:999px;border:1px solid transparent;background:var(--soft);color:var(--fg);caret-color:var(--gold)}
+.search input::placeholder{color:var(--mut)}
+.search input:focus{outline:0;background:var(--card);border-color:var(--bd);box-shadow:0 0 0 4px var(--glow)}
+.search button{position:absolute;right:4px;top:4px;bottom:4px;width:34px;padding:0;border:0;border-radius:50%;font-size:0;background:var(--gold) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6'/%3E%3C/svg%3E") center/16px no-repeat;cursor:pointer}
+.sug{display:none;position:absolute;top:100%;left:0;right:0;margin-top:8px;background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:6px;box-shadow:var(--sh);z-index:20;overflow:hidden}
+.sug div{padding:8px 14px;cursor:pointer;font-size:14.5px;border-radius:10px}
+.sug div.on,.sug div:hover{background:var(--soft)}
+main{max-width:1360px;margin:0 auto;padding:10px 24px 56px}
+h1{font-size:19px;font-weight:600;margin:14px 0 6px;line-height:1.35}
+h2{font-size:13px;margin:0;color:var(--mut);font-weight:600;letter-spacing:.6px;text-transform:uppercase}
 p{color:var(--mut);margin:6px 0}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px 18px;margin:16px 0}
-.watch{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:26px;align-items:start}
-@media (max-width:920px){.watch{grid-template-columns:minmax(0,1fr)}}
-video{width:100%;max-height:74vh;background:#000;border-radius:12px;display:block;user-select:none;-webkit-user-select:none;cursor:pointer}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:14px 18px;margin:16px 0}
+.watch{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:32px;align-items:start}
+@media (max-width:980px){.watch{grid-template-columns:minmax(0,1fr)}}
+video{width:100%;max-height:74vh;background:#000;border-radius:16px;display:block;user-select:none;-webkit-user-select:none;cursor:pointer}
 video::selection{background:transparent}
-.row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin:6px 0 10px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:4px 0 8px}
+.row.tools{gap:6px 6px;margin:0 0 12px}
+.row.tools .qbtn{background:transparent}
+.row.tools .qbtn:hover{background:var(--soft)}
+.row.tools .qbtn.on{background:var(--glow)}
+.vr{width:1px;height:18px;background:var(--bd);margin:0 4px}
 .chan{font-weight:600;color:var(--fg);text-decoration:none}
 .chan:hover{color:var(--gold)}
-.meta{color:var(--mut);font-size:14px}
+.meta{color:var(--mut);font-size:13.5px}
 .sp{flex:1}
-.pick{font-size:14px;color:var(--mut)}
-.qwrap{position:relative;display:flex;align-items:center;gap:8px}
-.qbtn{font:inherit;font-size:14px;padding:5px 12px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer;white-space:nowrap}
-.qbtn:hover{border-color:var(--gold)}
-.qmenu{position:absolute;right:0;top:100%;margin-top:6px;z-index:20;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:4px;min-width:140px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
-.qi{padding:7px 14px;border-radius:7px;cursor:pointer;white-space:nowrap;font-size:14px;color:var(--fg)}
-.qi:hover{background:rgba(214,170,72,.15)}
+.pick{font-size:13px;color:var(--mut)}
+.pick>span:not(.meta){display:none}
+.qwrap{position:relative;display:flex;align-items:center;gap:6px}
+.qbtn{font:inherit;font-size:13.5px;padding:6px 14px;border-radius:999px;border:0;background:var(--soft);color:var(--fg);cursor:pointer;white-space:nowrap;transition:background .12s}
+.qbtn:hover{background:var(--glow)}
+.qmenu{position:absolute;right:0;top:100%;margin-top:6px;z-index:20;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:5px;min-width:140px;box-shadow:var(--sh)}
+.qi{padding:7px 14px;border-radius:9px;cursor:pointer;white-space:nowrap;font-size:14px;color:var(--fg)}
+.qi:hover{background:var(--soft)}
 .qi.on{color:var(--gold);font-weight:600}
-.qbtn.on{border-color:var(--gold);color:var(--gold)}
+.qbtn.on{background:var(--glow);color:var(--gold)}
+#sub{background:var(--gold);color:#fff;font-weight:600}
+#sub:hover{filter:brightness(1.07)}
+#sub.on{background:var(--soft);color:var(--mut)}
 .vwrap{position:relative}
 .cc{position:absolute;left:4%;right:4%;bottom:9%;text-align:center;pointer-events:none;line-height:1.35;z-index:5}
 .cc.fs{position:fixed;bottom:8%;z-index:2147483647}
 .cc span{display:inline-block;background:rgba(0,0,0,.78);color:#fff;padding:2px 10px;border-radius:5px;font-size:clamp(15px,2.3vw,26px);margin:2px 0;white-space:pre-wrap}
-.sbn{position:absolute;right:12px;bottom:18px;background:rgba(0,0,0,.82);color:#fff;border:1px solid var(--gold);border-radius:8px;padding:6px 10px;font-size:14px;z-index:6}
+.sbn{position:absolute;right:12px;bottom:18px;background:rgba(0,0,0,.82);color:#fff;border:1px solid var(--gold);border-radius:10px;padding:6px 10px;font-size:14px;z-index:6}
 .sbn button{margin-left:8px;font:inherit;font-size:13px;background:transparent;color:var(--gold);border:1px solid var(--gold);border-radius:6px;padding:2px 8px;cursor:pointer}
 .desc .text a.ts{color:var(--gold);font-variant-numeric:tabular-nums}
-select{font:inherit;font-size:14px;padding:5px 10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer}
-a.btn{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);text-decoration:none;cursor:pointer}
-a.gold{background:var(--gold);color:#1b1608;font-weight:600;border-color:var(--gold)}
-a.plain{color:var(--mut);font-size:14px;text-decoration:none}
+select{font:inherit;font-size:14px;padding:6px 12px;border-radius:999px;border:0;background:var(--soft);color:var(--fg);cursor:pointer}
+a.btn{font:inherit;font-size:14px;padding:7px 16px;border-radius:999px;border:0;background:var(--soft);color:var(--fg);text-decoration:none;cursor:pointer}
+a.gold{background:var(--gold);color:#fff;font-weight:600}
+a.plain{color:var(--mut);font-size:13px;text-decoration:none;margin-left:6px}
 a.plain:hover{color:var(--gold)}
-details.desc{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:10px 16px}
-details.desc summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--mut)}
+details.desc{background:var(--soft);border-radius:16px;padding:12px 18px}
+details.desc summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--fg)}
 .desc .text a{color:var(--gold);text-decoration:none}
 .desc .text a:hover{text-decoration:underline}
 .desc .text{white-space:pre-wrap;font-size:14px;margin-top:10px;word-break:break-word}
 .err{font-family:Consolas,monospace;font-size:13px;word-break:break-word}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:28px 20px}
 a.vid{color:var(--fg);text-decoration:none;display:block}
-.thumb{position:relative;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden}
-.thumb img{width:100%;height:100%;object-fit:cover;display:block}
-.dur{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.8);color:#fff;font-size:12px;padding:1px 6px;border-radius:5px}
-.vt{font-weight:600;font-size:14px;margin:7px 0 2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.thumb{position:relative;aspect-ratio:16/9;background:var(--soft);border-radius:14px;overflow:hidden;transition:box-shadow .18s,transform .18s}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .25s}
+.thumb img.ok{opacity:1}
+.dur{position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.72);color:#fff;font-size:12px;padding:1px 7px;border-radius:6px}
+.vt{font-weight:500;font-size:14.5px;line-height:1.4;margin:9px 0 2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .vm{color:var(--mut);font-size:13px}
-.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px}
-.bl{color:var(--mut);font-size:13px;min-width:70px}
-.chip{font:inherit;font-size:13px;padding:5px 13px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer;text-decoration:none}
-.chip:hover{border-color:var(--gold)}
-.chip.on{background:var(--gold);color:#1a1a1a;border-color:var(--gold)}
-.next a.vid{display:flex;gap:10px;margin-bottom:12px}
-.next .thumb{width:158px;flex:none}
+a.vid:hover .thumb{box-shadow:var(--sh);transform:translateY(-2px)}
+a.vid:hover .vt{color:var(--gold)}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8px}
+.bl{display:none}
+.chip{font:inherit;font-size:13px;padding:5px 14px;border-radius:999px;border:0;background:var(--soft);color:var(--fg);cursor:pointer;text-decoration:none}
+.chip:hover{background:var(--glow)}
+.chip.on{background:var(--fg);color:var(--bg)}
+.next a.vid{display:flex;gap:12px;margin-bottom:14px}
+.next .thumb{width:160px;flex:none;border-radius:10px}
 .next .vt{margin-top:0;font-size:13.5px}
-.banner{display:block;width:100%;height:150px;object-fit:cover;border-radius:12px;background:var(--card)}
-.chead{display:flex;gap:20px;align-items:center;margin:16px 0 8px}
-.avatar{width:92px;height:92px;border-radius:50%;object-fit:cover;background:var(--card);flex:none}
-.chead h1{margin:0;font-size:26px}
+.banner{display:block;width:100%;height:160px;object-fit:cover;border-radius:18px;background:var(--soft)}
+.chead{display:flex;gap:20px;align-items:center;margin:18px 0 8px}
+.avatar{width:84px;height:84px;border-radius:50%;object-fit:cover;background:var(--soft);flex:none}
+.chead h1{margin:0;font-size:24px}
 .cdesc{max-width:640px;font-size:14px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--bd);margin:12px 0 18px}
-.tabs button{font:inherit;background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);padding:9px 18px;cursor:pointer}
-.tabs button.on{color:var(--fg);border-bottom-color:var(--gold)}
-.cm{padding:10px 0;border-bottom:1px solid var(--bd)}
+.tabs{display:flex;gap:2px;margin:12px 0 20px}
+.tabs button{font:inherit;font-size:14px;background:none;border:0;border-radius:999px;color:var(--mut);padding:7px 16px;cursor:pointer}
+.tabs button.on{color:var(--fg);background:var(--soft)}
+.cm{padding:12px 0}
 .cm .meta{font-size:12px;color:var(--mut)}
 .cm .meta b{color:var(--fg);font-size:13px}
 .cm .text{white-space:pre-wrap;font-size:14px;margin-top:4px;word-break:break-word}
 .cm .text a{color:var(--gold);text-decoration:none}
 #cs{margin-top:14px}
 #cs .more{margin:14px 0 0}
-button.more{display:block;margin:26px auto 0;font:inherit;padding:9px 26px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer}
-button.more:hover{border-color:var(--gold)}
-header{background:linear-gradient(180deg,rgba(214,170,72,.10),transparent 120%),var(--bg)}
-.search input:focus{outline:0;border-color:var(--gold);box-shadow:0 0 0 3px rgba(214,170,72,.22)}
-.thumb{transition:box-shadow .15s,transform .15s}
-.thumb img{opacity:0;transition:opacity .25s}
-.thumb img.ok{opacity:1}
-a.vid:hover .thumb{box-shadow:0 8px 20px rgba(0,0,0,.32);transform:translateY(-2px)}
-a.vid:hover .vt{color:var(--gold)}
-.dur{backdrop-filter:none}
+button.more{display:block;margin:30px auto 0;font:inherit;font-size:14px;padding:9px 26px;border-radius:999px;border:0;background:var(--soft);color:var(--fg);cursor:pointer}
+button.more:hover{background:var(--glow)}
 .watch.theater{grid-template-columns:minmax(0,1fr)}
 .watch.theater video{max-height:84vh}
-.sec{display:flex;align-items:center;gap:12px;margin:26px 0 12px}
-.sec h2{margin:0}
+.sec{display:flex;align-items:center;gap:12px;margin:34px 0 14px}
 .sc{position:relative}
-.prog{height:3px;border-radius:2px;background:rgba(255,255,255,.14);margin-top:5px;overflow:hidden}
+.prog{height:3px;border-radius:2px;background:var(--soft);margin-top:6px;overflow:hidden}
 .prog i{display:block;height:100%;background:var(--gold)}
 .plm .qi.mk{color:var(--gold)}
-.rmv{position:absolute;top:6px;left:6px;z-index:2;width:26px;height:26px;border-radius:50%;border:0;background:rgba(0,0,0,.72);color:#fff;font-size:16px;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s}
+.rmv{position:absolute;top:8px;left:8px;z-index:2;width:26px;height:26px;border-radius:50%;border:0;background:rgba(0,0,0,.7);color:#fff;font-size:16px;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s}
 .sc:hover .rmv{opacity:1}
 #rs{margin:8px 0;display:flex;gap:8px;align-items:center}
 .hero{text-align:center;margin-top:14vh}
-.hero h1{font-size:42px;font-weight:500;letter-spacing:1px;margin:0}
-.hero svg{width:60px;height:60px}
+.hero h1{font-size:40px;font-weight:500;letter-spacing:.5px;margin:6px 0 0}
+.hero svg{width:52px;height:52px}
+.hero p{font-size:14.5px}
 .pulse svg{animation:pulse 1.6s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
 "#;
 
-const FEATHER: &str = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#d6aa48\" fill-opacity=\"0.16\" stroke=\"#d6aa48\" stroke-width=\"1.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"><path d=\"M20.5 3.5c-6 0-11 3-13.5 8.5L5.5 16.5c-.4 1.1-.5 2.2-.4 3.3 1.1.1 2.2 0 3.3-.4C14 17.5 19.5 12.5 20.5 3.5z\"/><path d=\"M3.5 21L13 11.5\" fill=\"none\"/></svg>";
+const FEATHER: &str = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#e0603a\" fill-opacity=\"0.16\" stroke=\"#e0603a\" stroke-width=\"1.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"><path d=\"M20.5 3.5c-6 0-11 3-13.5 8.5L5.5 16.5c-.4 1.1-.5 2.2-.4 3.3 1.1.1 2.2 0 3.3-.4C14 17.5 19.5 12.5 20.5 3.5z\"/><path d=\"M3.5 21L13 11.5\" fill=\"none\"/></svg>";
 
 fn page(title: &str, body: &str, refresh: bool) -> String {
     page_with(title, "", false, body, refresh)
@@ -1214,9 +1222,7 @@ fn subscriptions_section(count: usize, plume: &str) -> String {
         return String::new();
     }
     let feed = if count == 0 {
-        "<p class=\"meta\" id=\"subl\">Follow channels with the Subscribe button on a video or channel page, \
-         or import your list from YouTube (Google Takeout's subscriptions.csv) or another app (OPML). \
-         No account is used: Sirocco reads each channel's public feed.</p>"
+        "<p class=\"meta\" id=\"subl\">Subscribe from any video or channel page, or import a list (YouTube's subscriptions.csv or OPML). No account needed.</p>"
             .to_string()
     } else {
         format!("<p class=\"meta\" id=\"subl\">Loading the newest videos of {count} channel{}...</p><div class=\"grid\" id=\"g-subs\"></div>", if count == 1 { "" } else { "s" })
@@ -1321,7 +1327,7 @@ fn home_html() -> String {
         true,
         &format!(
             "<div class=\"hero\" style=\"margin-top:{}\">{FEATHER}<h1>Plume</h1>\
-             <p>YouTube without the clutter. Search above, or paste a video link into the address bar.</p></div>{sections}{script}",
+             <p>YouTube without the clutter. Search above, or paste a link into the address bar.</p></div>{sections}{script}",
             if sections.is_empty() { "14vh" } else { "5vh" }
         ),
         false,
@@ -1777,15 +1783,16 @@ fn player_html(id: &str, info: &innertube::PlayerInfo, choices: &[Choice]) -> St
          <div id=\"rs\" style=\"display:none\"><button type=\"button\" id=\"rsb\" class=\"qbtn\"></button><button type=\"button\" id=\"rso\" class=\"qbtn\">Start over</button></div>\
          <h1>{}</h1>\
          <div class=\"row\">{author}{subscribe}<span class=\"meta\">{}</span><span class=\"sp\"></span>\
-         <button type=\"button\" id=\"dv\" class=\"qbtn\" title=\"Save this video (.mp4) to your Downloads folder\">Download video</button>\
-         <button type=\"button\" id=\"da\" class=\"qbtn\" title=\"Save only the sound as an MP3 in your Downloads folder\">Download MP3</button>\
          <button type=\"button\" id=\"wl\" class=\"qbtn\">Watch later</button>\
-         <span class=\"qwrap\"><button type=\"button\" id=\"plb\" class=\"qbtn\">Add to playlist</button><div id=\"plm\" class=\"qmenu plm\" style=\"display:none\"></div></span><button type=\"button\" id=\"th\" class=\"qbtn\">Theater</button>\
+         <span class=\"qwrap\"><button type=\"button\" id=\"plb\" class=\"qbtn\">Add to playlist</button><div id=\"plm\" class=\"qmenu plm\" style=\"display:none\"></div></span></div>\
+         <div class=\"row tools\"><button type=\"button\" id=\"dv\" class=\"qbtn\" title=\"Save this video (.mp4) to your Downloads folder\">Download video</button>\
+         <button type=\"button\" id=\"da\" class=\"qbtn\" title=\"Save only the sound as an MP3 in your Downloads folder\">Download MP3</button>\
+         <i class=\"vr\"></i><button type=\"button\" id=\"th\" class=\"qbtn\">Theater</button>\
          <button type=\"button\" id=\"lp\" class=\"qbtn\" title=\"Play this video again and again\">Loop</button>\
          <button type=\"button\" id=\"an\" class=\"qbtn\" title=\"When the video ends, play the first one in Up next\">Autoplay next</button>\
-         <div class=\"pick qwrap\"><span id=\"res\" class=\"meta\"></span><span>Speed</span><button type=\"button\" id=\"sb\" class=\"qbtn\"></button>\
+         <span class=\"sp\"></span><div class=\"pick qwrap\"><span id=\"res\" class=\"meta\"></span><span title=\"Speed\">Speed</span><button type=\"button\" id=\"sb\" class=\"qbtn\" title=\"Speed\"></button>\
          <div id=\"sm\" class=\"qmenu\" style=\"display:none\"></div>\
-         <span>Quality</span><button type=\"button\" id=\"qb\" class=\"qbtn\"></button>\
+         <span title=\"Quality\">Quality</span><button type=\"button\" id=\"qb\" class=\"qbtn\" title=\"Quality\"></button>\
          <div id=\"qm\" class=\"qmenu\" style=\"display:none\"></div><select id=\"q\" style=\"display:none\">{options}</select>{subtitles}</div>\
          <a class=\"plain\" href=\"{}#{FRAGMENT_DIRECT}\">Open on YouTube</a></div>\
          {description_block}{comments_block}</div>{next}</div>\
@@ -2275,5 +2282,37 @@ mod tests {
         assert_eq!(format_duration(3725), "1:02:05");
         assert_eq!(format_views(12), "12 views");
         assert_eq!(format_views(2_500), "2.5K views");
+    }
+
+    /// `PTERON_UI_DUMP=/some/dir cargo test dump_ui_pages` writes sample pages for looking at the design.
+    #[test]
+    fn dump_ui_pages() {
+        let Ok(dir) = std::env::var("PTERON_UI_DUMP") else { return };
+        let item = |n: usize| VideoItem {
+            id: "dQw4w9WgXcQ".into(),
+            title: format!("A fairly long video title number {n} that wraps onto a second line when the card is narrow"),
+            channel: "Some Channel".into(),
+            duration_secs: Some(60 * (n as u64 + 3) + 7),
+            views: "1.2M views".into(),
+            published: "3 years ago".into(),
+        };
+        let items: Vec<VideoItem> = (0..12).map(item).collect();
+        let write = |name: &str, html: String| std::fs::write(format!("{dir}/{name}.html"), html).unwrap();
+        write("results", results_html(&Request::Search("rust".into(), Filter::default()), "rust", &items, Some("T")));
+        write("home", home_html());
+        write("player", player_html("dQw4w9WgXcQ", &info(), &choices()));
+        write("error", error_html(&Request::Search("x".into(), Filter::default()), "Something went wrong."));
+        let channel = innertube::Channel {
+            id: "UCabc".into(),
+            title: "Some Channel".into(),
+            handle: "@some".into(),
+            avatar: String::new(),
+            banner: String::new(),
+            subscribers: "2.1M subscribers".into(),
+            description: "About this channel.".into(),
+            videos: items.clone(),
+            next: None,
+        };
+        write("channel", channel_html(&Request::Channel("/@some".into()), &channel));
     }
 }
